@@ -5,9 +5,8 @@ Gemini and Copilot exports, plus a derived index of the Gemini export. The
 archives are not published, so source references below name the kind of source
 and, where it helps, a line range, not a location.
 
-PERCEIVE is the better-attested of the two systems in this pair. Unlike the
-HTTP artifact, it survives as a complete, coherent reference implementation,
-and most of it was worth keeping. What follows separates what was recovered
+PERCEIVE survives as a complete, coherent reference implementation, and most
+of it was worth keeping. What follows separates what was recovered
 from what was changed, and every change is justified by something that can be
 run.
 
@@ -169,10 +168,9 @@ Low". No such claim is made here.
 
 The archives include a review of the project that produced them. It describes
 a feedback loop in which the model's fluent validation of an architecture was
-mistaken for verification of it: tests the model reported as passing were
-narrated by the model, not run against anything external. The review is not
-quoted here. The lesson is worth keeping in mind before extending this
-repository.
+mistaken for verification of it: the model reported parity and pass results
+that were never checked against anything external. The lesson is worth keeping
+in mind before extending this repository.
 
 That is the reason every claim in this repository is attached to a test, every
 number is measured rather than asserted, and the limits of the compliance
