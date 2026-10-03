@@ -1,12 +1,12 @@
 # Provenance
 
-Reconstructed from the conversation archives in `wking53214/Claude_History`,
-`wking53214/ChatGPT_History`, `wking53214/Gemini_History`,
-`wking53214/Gemini_Extraction` and `wking53214/CoPilot_History`.
+Reconstructed from the author's private conversation archives: Claude, ChatGPT,
+Gemini and Copilot exports, plus a derived index of the Gemini export. The
+archives are not published, so source references below name the kind of source
+and, where it helps, a line range, not a location.
 
-PERCEIVE is the better-attested of the two systems in this pair. Unlike the
-HTTP artifact, it survives as a complete, coherent reference implementation,
-and most of it was worth keeping. What follows separates what was recovered
+PERCEIVE survives as a complete, coherent reference implementation, and most
+of it was worth keeping. What follows separates what was recovered
 from what was changed, and every change is justified by something that can be
 run.
 
@@ -16,7 +16,7 @@ The archives carry two expansions, used in different contexts:
 
 - **Pediatric Early-warning Research & Clinical Evidence Intelligence
   Validation Engine** — the docstring of the v1.0.0 monolith
-  (`Claude_History/transcripts/2e330101-...md`, line 14695).
+  (the Claude transcript of the monolith, line 14695).
 - **Autonomous Policy Enforcement and Governance Kernel** — the later,
   domain-neutral framing used once the kernel was separated from the clinical
   application.
@@ -30,19 +30,19 @@ supplies a manifest.
 
 | Component | Source | Status |
 |---|---|---|
-| `Event`, `State`, `Manifest`, `AuditEntry`, `ExecutionMetrics` | `Claude_History/transcripts/2e330101-...md`, lines 14720-14810 | Shapes preserved |
+| `Event`, `State`, `Manifest`, `AuditEntry`, `ExecutionMetrics` | Claude transcript of the monolith, lines 14720-14810 | Shapes preserved |
 | `GovernanceKernel`: `valid`, `allowed`, `transition`, `dial`, `clone`, `run_event` | same, lines 14815-14960 | Semantics preserved |
 | Hash-linked audit entries | same, `compute_audit_hash` | Preserved and extended |
 | Manifest hashing over invariant source | same, `Manifest.compute_hash` | Preserved, made fault-tolerant |
 | `DecisionStatus` enum | same, line 14721 | Preserved, one member added |
-| Six gate names | `ChatGPT_History` corpus inventory | Preserved as the six gates |
-| Processing chain order | `Gemini_Extraction` functional fingerprint | Preserved in `CANONICAL_ORDER` |
+| Six gate names | ChatGPT corpus inventory | Preserved as the six gates |
+| Processing chain order | Gemini functional fingerprint | Preserved in `CANONICAL_ORDER` |
 | Control constants `harm` / `forbidden` / `unsafe` / `drift`, 500-char limit | same | Preserved in `gates.py` |
-| Pediatric vital bounds, z-score reference, energy thresholds | `Claude_History/transcripts/2e330101-...md`, lines 15055-15210 | Preserved verbatim |
+| Pediatric vital bounds, z-score reference, energy thresholds | Claude transcript of the monolith, lines 15055-15210 | Preserved verbatim |
 | Cohort mix and per-class distributions | same, `SyntheticPatientDataset` | Preserved verbatim |
 | 60% max vital step | same, `gate_vitals_plausible` | Preserved verbatim |
-| DGK multi-node consensus | `ChatGPT_History`, "DGK Multi-Node Quorum (Emergency Overrides Only)" | Reconstructed; see below |
-| Compliance exporters (HIPAA, FDA 510(k), SOX, GDPR) | `ChatGPT_History` corpus inventory | Reconstructed; see below |
+| DGK multi-node consensus | ChatGPT archive, "DGK Multi-Node Quorum (Emergency Overrides Only)" | Reconstructed; see below |
+| Compliance exporters (HIPAA, FDA 510(k), SOX, GDPR) | ChatGPT corpus inventory | Reconstructed; see below |
 
 ## Corrections to recovered code
 
@@ -166,16 +166,11 @@ Low". No such claim is made here.
 
 ## On the archives' own warning
 
-These archives contain a clinical retrospective of the project that produced
-them. It identifies a feedback loop in which the model's fluent validation of
-an architecture was mistaken for verification of it, and it is worth reading
-before extending this repository:
-
-> "Every time the Architect tested the system ... the model confirmed a 1.0000
-> Parity and a PASS status. This simulated validation bypasses traditional
-> reality-testing mechanisms (such as compiler errors, market performance, or
-> peer review)."
-> — `Claude_History/transcripts/8cdf517a-...md`, line 829
+The archives include a review of the project that produced them. It describes
+a feedback loop in which the model's fluent validation of an architecture was
+mistaken for verification of it: the model reported parity and pass results
+that were never checked against anything external. The lesson is worth keeping
+in mind before extending this repository.
 
 That is the reason every claim in this repository is attached to a test, every
 number is measured rather than asserted, and the limits of the compliance
