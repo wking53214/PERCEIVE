@@ -1,6 +1,7 @@
 """PERCEIVE's CNS connector: one gate, either end, fail-closed, bound to content."""
 
 import importlib
+import os
 import sys
 
 import pytest
@@ -9,7 +10,10 @@ from perceive.cns_connector import CnsNotInstalled, Judged, PerceiveCnsGate, cns
 from perceive.gates import BaseGate
 from perceive.models import Event, Manifest, State
 
-cns_gate = pytest.importorskip("cns.gate", reason="needs the pinned CNS package")
+if os.environ.get("PERCEIVE_REQUIRE_CNS") == "1":  # CI: a missing cns is a failure, not a skip
+    import cns.gate as cns_gate
+else:
+    cns_gate = pytest.importorskip("cns.gate", reason="needs the pinned CNS package")
 
 
 def manifest():
