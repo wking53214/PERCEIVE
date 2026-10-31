@@ -14,7 +14,7 @@ dependencies = []
 [project.optional-dependencies]
 # Optional: exposes PERCEIVE gates as CNS gates (src/perceive/cns_connector.py).
 # Pinned to tag v1.9.0. Not a runtime dependency.
-cns = ["cns @ git+https://github.com/wking53214/CNS.git@v1.9.0"]
+cns = ["cns @ git+https://github.com/wking53214/CNS.git@v2.3.0"]
 dev = ["pytest>=7"]
 
 [project.scripts]
