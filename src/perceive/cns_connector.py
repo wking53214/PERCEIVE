@@ -81,7 +81,8 @@ class Judged:
     """Everything a PERCEIVE gate needs to judge, as one candidate.
 
     At the ALPHA end, `state` is the state before the event is applied. At the
-    OMEGA end, `state` is the state the event would produce.
+    OMEGA end, `state` is the state the event would produce, so its history
+    must end with `event`; any other state is refused.
     """
 
     event: Event
@@ -144,6 +145,17 @@ class PerceiveCnsGate:
                 gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
                 reason=f"fault: non-bool verdict {ok!r}", subject=subject, subject_digest=digest,
             )
+        if ok and self.position is cns.GatePosition.OMEGA:
+            history = candidate.state.history
+            if not history or history[-1] != candidate.event:
+                # The post-state is checked, not taken on trust: the state
+                # the event produced ends with that event.
+                return cns.GateResult(
+                    gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
+                    reason="post-state does not end with the judged event; it is not the "
+                    "state this event produced",
+                    subject=subject, subject_digest=digest,
+                )
         outcome = cns.GateOutcome.PASS if ok else cns.GateOutcome.TERMINAL_BREACH
         return cns.GateResult(
             gate=self.name, position=self.position, outcome=outcome,

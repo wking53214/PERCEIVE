@@ -148,11 +148,16 @@ class MonotonicTimeGate(BaseGate):
     name = "monotonic_time"
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
-        if not state.history:
-            return True, ""
-        last = state.history[-1].timestamp
-        if event.timestamp < last:
-            return False, f"timestamp {event.timestamp} precedes {last}"
+        # Judged before the work, the state is the prior history; judged on
+        # the result, it already ends with the event. Either way the event is
+        # placed last once, and the whole timeline must not go backwards, so
+        # the event is never compared only with itself.
+        timeline = list(state.history)
+        if not timeline or timeline[-1] != event:
+            timeline.append(event)
+        for earlier, later in zip(timeline, timeline[1:]):
+            if later.timestamp < earlier.timestamp:
+                return False, f"timestamp {later.timestamp} precedes {earlier.timestamp}"
         return True, ""
 
 
