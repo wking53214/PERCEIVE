@@ -132,7 +132,11 @@ class InvariantValidatorGate(BaseGate):
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         if manifest.is_expired():
             return False, f"manifest {manifest.manifest_id} has expired"
-        if manifest.hash and not manifest.is_sealed():
+        if not manifest.hash:
+            # An unsealed manifest carries no evidence its rules are the
+            # approved ones, so it is refused rather than trusted.
+            return False, f"manifest {manifest.manifest_id} is not sealed"
+        if not manifest.is_sealed():
             return False, (
                 f"manifest {manifest.manifest_id} hash does not match its "
                 f"contents; the ruleset changed after sealing"
