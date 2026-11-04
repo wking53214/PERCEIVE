@@ -88,6 +88,13 @@ class PERCEIVEEngine:
         )
         self.patches = patches or MicroPatchEngine()
         self._states: Dict[str, State] = {}
+        #: Subjects with a refusal no one has resolved, and why. While a
+        #: subject is listed here every further event for it is refused, so a
+        #: later event judged against an empty or stale state cannot clear it.
+        self._refusals: Dict[str, str] = {}
+        #: Every explicit resolution, in order: (subject, resolved_by, reason,
+        #: the refusal it cleared).
+        self.resolutions: List[Tuple[str, str, str, str]] = []
 
     # -- governed submission ----------------------------------------------
 
@@ -95,16 +102,23 @@ class PERCEIVEEngine:
         """Govern one event against its subject's accumulated state."""
         state = self._states.get(event.context_id, State())
 
-        patch_result = self.patches.apply(event, state, self.manifest, self.gates)
+        gates = self.gates
+        pending = self._refusals.get(event.context_id)
+        if pending is not None:
+            gates = [_UnresolvedRefusalGate(pending)] + list(self.gates)
+
+        patch_result = self.patches.apply(event, state, self.manifest, gates)
         effective = patch_result.event
 
         new_state, state_hash, entry = self.kernel.run_event(
-            state, effective, self.manifest, self.gates, patch_result.applied
+            state, effective, self.manifest, gates, patch_result.applied
         )
 
         if entry.decision is DecisionStatus.ACCEPTED:
             new_state.context["_history_length"] = len(new_state.history)
             self._states[event.context_id] = new_state
+        elif pending is None:
+            self._refusals[event.context_id] = f"{entry.decision.value}: {entry.reason}"
 
         response = PerceiveResponse(
             subject_id=event.context_id,
@@ -160,13 +174,35 @@ class PERCEIVEEngine:
         refusal while the system emitted the answer anyway.
         """
         state, responses = self.ingest_patient(patient)
-        final = responses[-1]
+        # The first refusal is the one that decides the subject; a later
+        # response only repeats that it is unresolved.
+        final = next((r for r in responses if not r.accepted), responses[-1])
 
         if final.accepted:
             final.risk = evaluate_risk(state.context.get("vitals", {}))
 
         final.chain_verified = self.verify()
         return final
+
+    # -- refusals ----------------------------------------------------------
+
+    def unresolved_refusal(self, subject_id: str) -> Optional[str]:
+        """The refusal still blocking a subject, or None."""
+        return self._refusals.get(subject_id)
+
+    def resolve_refusal(self, subject_id: str, resolved_by: str, reason: str) -> bool:
+        """Explicitly clear a subject's refusal. Returns False if none was pending.
+
+        A resolution must name who made it and why; it is recorded in
+        ``resolutions``. Nothing else clears a refusal.
+        """
+        if not str(resolved_by or "").strip() or not str(reason or "").strip():
+            raise ValueError("resolving a refusal needs a named resolver and a reason")
+        cleared = self._refusals.pop(subject_id, None)
+        if cleared is None:
+            return False
+        self.resolutions.append((subject_id, resolved_by, reason, cleared))
+        return True
 
     # -- reporting ---------------------------------------------------------
 
@@ -185,6 +221,19 @@ class PERCEIVEEngine:
 
     def state_of(self, subject_id: str) -> Optional[State]:
         return self._states.get(subject_id)
+
+
+class _UnresolvedRefusalGate(BaseGate):
+    """Refuses every event for a subject whose earlier refusal is unresolved."""
+
+    name = "unresolved_refusal"
+
+    def __init__(self, refusal: str) -> None:
+        super().__init__()
+        self.refusal = refusal
+
+    def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
+        return False, f"unresolved refusal for {event.context_id}: {self.refusal}"
 
 
 def run_synthetic(num_patients: int = 10, seed: int = 42):
