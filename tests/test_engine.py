@@ -65,6 +65,61 @@ class TestEngine:
         assert body["outcome"] == "unassessable"
         json.dumps(body, allow_nan=False)
 
+    def test_a_refused_admission_is_not_cleared_by_the_next_observation(self):
+        """PER-3: the observation after a refused admission must not pass.
+
+        The admission is refused at the perimeter, so the subject has no
+        governed state; the observation used to be judged against that empty
+        state and accepted, and the patient came back accepted and scored.
+        """
+        engine = PERCEIVEEngine()
+        patient = {**PATIENT, "patient_id": "PT_REF", "age_months": "classified"}
+        _, (admission, observation) = engine.ingest_patient(patient)
+        assert not admission.accepted
+        assert not observation.accepted
+        assert "unresolved refusal" in observation.reason
+
+        final = PERCEIVEEngine().evaluate_patient(patient)
+        assert not final.accepted
+        assert final.risk is None
+        assert final.decision == DecisionStatus.GATE_REJECTED.value
+        assert "classified" in final.reason
+
+    def test_a_refusal_persists_across_direct_submissions(self):
+        engine = PERCEIVEEngine()
+        bad = Event("admission", {"note": "classified"}, "PT_X", metadata={"authority": "attending"})
+        good = Event("observation", {"vitals": PATIENT["vitals"]}, "PT_X",
+                     metadata={"authority": "attending"})
+        assert not engine.submit(bad)[1].accepted
+        for _ in range(2):
+            _, response = engine.submit(good)
+            assert not response.accepted
+        assert engine.state_of("PT_X") is None
+        assert engine.verify()
+        assert engine.unresolved_refusal("PT_X")
+
+    def test_a_refusal_clears_only_by_explicit_resolution(self):
+        engine = PERCEIVEEngine()
+        bad = Event("admission", {"note": "classified"}, "PT_Y", metadata={"authority": "attending"})
+        good = Event("observation", {"vitals": PATIENT["vitals"]}, "PT_Y",
+                     metadata={"authority": "attending"})
+        engine.submit(bad)
+        with pytest.raises(ValueError):
+            engine.resolve_refusal("PT_Y", resolved_by="", reason="reviewed")
+        with pytest.raises(ValueError):
+            engine.resolve_refusal("PT_Y", resolved_by="dr_a", reason="  ")
+        assert engine.unresolved_refusal("PT_Y")
+        assert engine.resolve_refusal("PT_Y", resolved_by="dr_a", reason="marker was a typo")
+        assert engine.unresolved_refusal("PT_Y") is None
+        assert engine.submit(good)[1].accepted
+        assert engine.resolve_refusal("PT_Y", resolved_by="dr_a", reason="nothing pending") is False
+
+    def test_a_refusal_for_one_subject_does_not_block_another(self):
+        engine = PERCEIVEEngine()
+        engine.submit(Event("admission", {"note": "classified"}, "PT_A",
+                            metadata={"authority": "attending"}))
+        assert engine.evaluate_patient(PATIENT).accepted
+
     def test_state_accumulates_across_submissions(self):
         engine = PERCEIVEEngine()
         engine.evaluate_patient(PATIENT)
