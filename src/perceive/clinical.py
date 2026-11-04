@@ -12,6 +12,7 @@ found by testing the recovered model, not by reading it.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -169,13 +170,18 @@ class RiskComponents:
     energy: float
     outcome: str
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> Dict[str, Optional[float]]:
+        def r(value: float) -> Optional[float]:
+            # NaN marks "no reading"; it is emitted as null so the export
+            # stays strict JSON and is never mistaken for a zero.
+            return None if math.isnan(value) else round(value, 4)
+
         return {
-            "hr_z": round(self.hr_z, 4),
-            "rr_z": round(self.rr_z, 4),
-            "o2_z": round(self.o2_z, 4),
-            "temp_z": round(self.temp_z, 4),
-            "energy": round(self.energy, 4),
+            "hr_z": r(self.hr_z),
+            "rr_z": r(self.rr_z),
+            "o2_z": r(self.o2_z),
+            "temp_z": r(self.temp_z),
+            "energy": r(self.energy),
         }
 
 
@@ -192,6 +198,9 @@ OUTCOME_THRESHOLDS: Sequence[Tuple[float, str]] = (
     (16.0, "deterioration"),
 )
 CRITICAL = "critical"
+
+#: Not an outcome class: the model had no reading to score. Never "normal".
+UNASSESSABLE = "unassessable"
 
 
 def classify_outcome(energy: float) -> str:
@@ -210,7 +219,16 @@ def evaluate_risk(vitals: Dict[str, float]) -> RiskComponents:
     information. Missing vitals now contribute their population mean, so an
     absent sensor contributes nothing rather than a false alarm. Whether a
     reading may be absent at all is a question for the gates.
+
+    If no vital at all is present, there is nothing to score: every z-score
+    would default to zero and the energy to 0.0, the healthiest possible
+    reading. That result is reported as ``UNASSESSABLE`` with NaN scores, so
+    an empty record can never be read as normal.
     """
+    if all(vitals.get(name) is None for name in VITAL_REFERENCE):
+        nan = float("nan")
+        return RiskComponents(nan, nan, nan, nan, nan, UNASSESSABLE)
+
     z: Dict[str, float] = {}
     for name, (mean, std) in VITAL_REFERENCE.items():
         value = vitals.get(name)

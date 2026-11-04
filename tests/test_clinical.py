@@ -4,11 +4,14 @@ Several tests here pin corrections to the recovered archival code. Each is
 labelled with what the archive did and why it was wrong.
 """
 
+import math
+
 import pytest
 
 from perceive.clinical import (
     MAX_VITAL_STEP,
     OUTCOME_MIX,
+    UNASSESSABLE,
     VITAL_BOUNDS,
     MonotonicTimeGate,
     SyntheticPatientDataset,
@@ -59,8 +62,27 @@ class TestRiskModel:
         absent sensor produced the model's loudest alarm. Missing readings now
         contribute their population mean, and therefore nothing.
         """
-        assert evaluate_risk({}).outcome == "normal"
-        assert evaluate_risk({}).energy == pytest.approx(0.0)
+        assert evaluate_risk({}).outcome == UNASSESSABLE
+        assert math.isnan(evaluate_risk({}).energy)
+
+    @pytest.mark.parametrize("vitals", [
+        {},
+        {"heart_rate": None, "respiratory_rate": None},
+        {"blood_pressure": 90.0},
+    ])
+    def test_no_reading_at_all_is_unassessable_not_normal(self, vitals):
+        """PER-1: with no vital sign to score, the model must not say normal.
+
+        Every z-score would default to zero and the energy to 0.0, which is
+        the healthiest possible reading. Absence of every reading is not
+        evidence of health, so the result is explicitly unassessable and its
+        energy is NaN, which no outcome threshold can classify.
+        """
+        result = evaluate_risk(vitals)
+        assert result.outcome == UNASSESSABLE
+        assert result.outcome != "normal"
+        assert math.isnan(result.energy)
+        assert all(v is None for v in result.to_dict().values())
 
     def test_a_single_missing_vital_does_not_swamp_the_others(self):
         partial = dict(HEALTHY)
