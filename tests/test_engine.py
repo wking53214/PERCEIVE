@@ -55,6 +55,16 @@ class TestEngine:
         assert not response.accepted
         assert response.risk is None
 
+    def test_empty_vitals_are_not_scored_normal(self):
+        """PER-1: a patient with no vitals must not come back normal."""
+        empty = {**PATIENT, "patient_id": "PT_EMPTY", "vitals": {}}
+        response = PERCEIVEEngine().evaluate_patient(empty)
+        assert response.risk is not None
+        assert response.risk.outcome == "unassessable"
+        body = response.to_dict()
+        assert body["outcome"] == "unassessable"
+        json.dumps(body, allow_nan=False)
+
     def test_state_accumulates_across_submissions(self):
         engine = PERCEIVEEngine()
         engine.evaluate_patient(PATIENT)
