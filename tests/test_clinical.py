@@ -152,6 +152,15 @@ class TestClinicalGates:
         late = Event("obs", {}, "p1", timestamp="2026-01-01T00:00:00")
         assert not MonotonicTimeGate().check(late, state, pediatric_manifest())[0]
 
+    def test_backwards_observation_rejected_in_the_post_state(self):
+        """PER-5: judged on the state it produced, the event is the last entry."""
+        early = Event("obs", {}, "p1", timestamp="2026-06-01T12:00:00")
+        late = Event("obs", {}, "p1", timestamp="2026-01-01T00:00:00")
+        post = State(history=[early, late])
+        assert not MonotonicTimeGate().check(late, post, pediatric_manifest())[0]
+        on_time = Event("obs", {}, "p1", timestamp="2026-07-01T00:00:00")
+        assert MonotonicTimeGate().check(on_time, State(history=[early, on_time]), pediatric_manifest())[0]
+
 
 class TestSyntheticCohort:
     def test_cohort_is_reproducible(self):
