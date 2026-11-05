@@ -7,7 +7,7 @@ name = "perceive"
 version = "2.0.0"
 description = "PERCEIVE - a governance kernel with a verifiable audit ledger"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = []
 
