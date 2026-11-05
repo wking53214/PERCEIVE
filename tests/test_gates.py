@@ -102,6 +102,30 @@ class TestInvariantValidator:
         ok, reason = InvariantValidatorGate().check(ev(), State(), m)
         assert not ok and "changed after sealing" in reason
 
+    def test_never_sealed_manifest_is_rejected(self):
+        """PER-4: a manifest with no seal at all must not be trusted."""
+        m = Manifest("M", "v1", [lambda s, e: True], ["a"])
+        assert m.hash == ""
+        ok, reason = InvariantValidatorGate().check(ev(), State(), m)
+        assert not ok and "not sealed" in reason
+
+    def test_dropping_the_seal_after_a_rule_swap_is_rejected(self):
+        """PER-4: swap a rule, then clear the hash so no mismatch is seen."""
+        from perceive.clinical import pediatric_manifest
+        from perceive.engine import PERCEIVEEngine
+
+        m = pediatric_manifest()
+        m.invariants[0] = lambda s, e: True
+        m.hash = ""
+        assert not InvariantValidatorGate().check(ev(), State(), m)[0]
+        response = PERCEIVEEngine(manifest=m).evaluate_patient({
+            "patient_id": "PT_U", "age_months": 12, "admission_timestamp": "2026-01-01T00:00:00",
+            "vitals": {"heart_rate": 300, "respiratory_rate": 45,
+                       "oxygen_saturation": 97, "temperature": 37.0},
+        })
+        assert not response.accepted
+        assert response.risk is None
+
 
 class TestMicroPatchGate:
     def test_too_many_active_patches_is_a_rejection(self, manifest):

@@ -68,7 +68,51 @@ def test_omega_judges_the_state_the_work_would_produce():
     refused = gate.check(judged({"n": 1}, state=result_state))
     assert refused.position is cns_gate.GatePosition.OMEGA
     assert refused.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
-    assert gate.check(judged({"n": 1})).outcome is cns_gate.GateOutcome.PASS
+    assert gate.check(judged({"n": 1})).outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+
+
+def produced(event, prior=None):
+    """The post-state the kernel would produce: the prior history plus the event."""
+    prior = prior or State()
+    return State(history=list(prior.history) + [event], context=dict(prior.context))
+
+
+def test_omega_passes_a_real_post_state():
+    gate = PerceiveCnsGate(refuse_marked(), position="omega")
+    event = Event("observation", {"n": 1}, "p1")
+    assert gate.check(Judged(event, produced(event), manifest())).outcome is cns_gate.GateOutcome.PASS
+
+
+def test_backdating_is_refused_at_either_end():
+    """PER-5: at OMEGA the post-state ends with the event itself, so comparing
+    the event with the last history entry compared it to itself and passed."""
+    from perceive.clinical import MonotonicTimeGate
+
+    prior = State(history=[Event("observation", {}, "p1", timestamp="2026-01-02T00:00:00")])
+    late = Event("observation", {}, "p1", timestamp="2026-01-01T00:00:00")
+    alpha = PerceiveCnsGate(MonotonicTimeGate(), "alpha").check(Judged(late, prior, manifest()))
+    omega = PerceiveCnsGate(MonotonicTimeGate(), "omega").check(
+        Judged(late, produced(late, prior), manifest()))
+    assert alpha.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+    assert omega.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+
+    on_time = Event("observation", {}, "p1", timestamp="2026-01-03T00:00:00")
+    omega_ok = PerceiveCnsGate(MonotonicTimeGate(), "omega").check(
+        Judged(on_time, produced(on_time, prior), manifest()))
+    assert omega_ok.outcome is cns_gate.GateOutcome.PASS
+
+
+@pytest.mark.parametrize("post", [
+    State(),
+    State(history=[Event("observation", {"other": 1}, "p1")]),
+])
+def test_omega_refuses_a_post_state_the_event_did_not_produce(post):
+    """PER-5: the OMEGA post-state is checked, not taken on trust."""
+    event = Event("observation", {"n": 1}, "p1")
+    result = PerceiveCnsGate(refuse_marked(), "omega").check(Judged(event, post, manifest()))
+    assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+    assert "post-state" in result.reason
+    assert result.bound()
 
 
 def test_gate_name_carries_the_perceive_prefix():
