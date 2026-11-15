@@ -26,6 +26,71 @@ invariants are one manifest loaded into it. That separation is preserved here:
 `kernel.py` and `gates.py` know nothing about medicine, and `clinical.py`
 supplies a manifest.
 
+## A later lineage, found after this reconstruction
+
+This reconstruction was built from the v1.0.0 monolith of 2026-06-11. A later
+part of the same archive holds a more advanced state of the same system.
+Between 2026-06-13 and 2026-06-15 a Claude conversation consolidated a 19-file
+OBSERVE and PERCEIVE codebase into four source files and five test files, then
+hardened it until its own suite reached 186 passing tests. That final state is
+kept in `recovered/consolidated-2026-06/`, word for word apart from five
+documented redactions. It is a historical artifact beside the live package. It
+is not imported by `src/perceive` and it is not installed.
+
+What this changes about the rest of this document:
+
+- "PERCEIVE survives as a complete, coherent reference implementation" is true
+  of the v1.0.0 monolith. That was not the final state.
+- The `DGK` paragraph under "Reconstructed components" originally said DGK was
+  "never specified". That was wrong. The later lineage contains a working
+  implementation, described below.
+- `src/perceive` has no OBSERVE. Its `clinical.py` risk model is the simple
+  z-score sum from the v1.0.0 material. The later lineage replaces it with seven
+  separate risk engines and a calibrated fusion step.
+- The two designs are different architectures. Neither is a drop-in for the
+  other: this package judges an `Event` against a `State` and `Manifest`, while
+  the recovered kernel evaluates a `PolicyRequest` and returns a `PolicyVerdict`,
+  selecting gates by request type.
+
+**How the two DGKs differ.** The recovered one signs each proposal with
+HMAC-SHA256 over canonical JSON, groups proposals by L1 distance, and accepts the
+largest group if it reaches a quorum (default two thirds). A node that proposes
+something different does not veto; the majority decides. In that code the
+gateway object holds every node's key and builds every node's proposal from the
+same decision data, so consensus is unanimous by construction. It demonstrates
+the message format, the signing and the quorum arithmetic. It does not show
+independent evaluation by separate nodes. The DGK in `src/perceive/consensus.py`
+makes the opposite choices: each node evaluates the event itself, and a single
+refusal denies regardless of quorum.
+
+**How it was recovered.** The conversation's file-writing tool calls
+(`create_file` and `str_replace`) were replayed in order to rebuild each file's
+final state. For the eleven files kept here: no shell command wrote to any of
+them. The only shell actions that touched them were read-only checks and test
+runs, plus deleting two source files so they could be recreated from scratch
+(which is why those two have three `create_file` calls each). The one edit that
+did not apply on replay was also rejected in the original session (it failed
+input validation) and was redone afterwards. So the replay matches the state the
+author ended with. The suite was then run:
+186 passed, the same count the original session reported when it finished.
+
+**What the passing tests do and do not show.** They show that this code does what
+its own tests say. They are not an independent validation, and the clinical
+thresholds are evidence-informed defaults that were never checked by a
+pediatrician. See `NOTICE`.
+
+**Redactions.** Five lines named a real hospital as an integration target and a
+production deployment. Nothing in the archive establishes that, and this
+repository is public, so those words were replaced and nothing else was changed:
+
+| File | Line | Original | Replacement |
+|---|---|---|---|
+| `clinical_governance_system.py` | 15 | `NCH` in a docstring | `[REDACTED_ORG]` |
+| `clinical_governance_system.py` | 284 | node id `"nch"` | `"site-a"` |
+| `test_integration_consolidated.py` | 8 | `NCH` in a docstring | `[REDACTED_ORG]` |
+| `test_clinical_governance_system.py` | 98 | node id `"nch"` | `"site-a"` |
+| `README_CONSOLIDATED.md` | 62 | node id `"nch"` | `"site-a"` |
+
 ## Recovered intact
 
 | Component | Source | Status |
@@ -141,9 +206,10 @@ through review.
 gate is a veto, so adding a gate can only make the system more conservative.
 `test_adding_a_permissive_gate_cannot_unlock_a_denial` pins it.
 
-**DGK multi-node quorum** is described in the corpus as being for "critical
-decisions" and "emergency overrides only" but never specified. The
-reconstruction makes one deliberate choice, and it is the load-bearing one:
+**DGK multi-node quorum** is described in the v1.0.0 material as being for
+"critical decisions" and "emergency overrides only", without a specification.
+(A later implementation exists; see "A later lineage" above.) The
+reconstruction here makes one deliberate choice, and it is the load-bearing one:
 
 > Allowing an event requires a quorum of allows. A *single* node's refusal
 > denies, regardless of quorum.
