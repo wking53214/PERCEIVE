@@ -49,3 +49,24 @@ jobs:
         env:
           PERCEIVE_REQUIRE_CNS: "1"
         run: python -m pytest -q -rs
+
+  recovered:
+    # Tests the recovered June 2026 system in recovered/consolidated-2026-06/.
+    # It is standalone (standard library only) and is not part of the package,
+    # so it needs pytest and nothing else. The root suite does not collect it.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest
+      - name: Test the recovered system
+        working-directory: recovered/consolidated-2026-06
+        run: python -m pytest
