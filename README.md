@@ -191,6 +191,17 @@ recorded as a fault and never read as permission; a rejected event leaves
 state untouched; and a caller mutating the state it got back cannot alter the
 ledger.
 
+## Recovered later lineage
+
+`recovered/consolidated-2026-06/` holds a later, more complete state of this
+system, recovered from the archive: seven OBSERVE risk engines, a request-based
+PERCEIVE kernel, an orchestrator that wires them together, compliance exporters
+and 186 tests. It is kept as a historical artifact and is not part of the
+installed package. Run it with
+`cd recovered/consolidated-2026-06 && python -m pytest`. Read its
+[README](recovered/consolidated-2026-06/README.md) and the "A later lineage"
+section of [PROVENANCE.md](PROVENANCE.md) before relying on either design.
+
 ## Scope
 
 A governance kernel for event-driven state, with a clinical manifest as a
