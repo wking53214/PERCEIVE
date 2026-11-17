@@ -222,21 +222,44 @@ def test_a_gate_that_compares_with_prior_state_is_refused_at_omega():
     assert raised.value.supported == frozenset({"alpha"})
 
 
-def test_the_sentinel_gate_is_refused_at_omega():
+def test_the_sentinel_gate_refuses_backdating_at_either_end():
+    """It used to pass at OMEGA, where it compared the event with itself. The
+    connector now tells it which end it is judging."""
     from perceive.gates import SentinelGate
 
-    with pytest.raises(GatePositionNotSupported):
-        PerceiveCnsGate(SentinelGate(), "omega")
-    assert PerceiveCnsGate(SentinelGate(), "alpha").name == "perceive.sentinel"
+    prior = State(history=[Event("observation", {}, "p1", timestamp="2026-01-02T00:00:00")])
+    late = Event("observation", {}, "p1", timestamp="2026-01-01T00:00:00")
+    on_time = Event("observation", {}, "p1", timestamp="2026-01-03T00:00:00")
+    for end, state_for in (("alpha", lambda e: prior), ("omega", lambda e: produced(e, prior))):
+        gate = PerceiveCnsGate(SentinelGate(), end)
+        assert gate.check(Judged(late, state_for(late), manifest())).outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+        assert gate.check(Judged(on_time, state_for(on_time), manifest())).outcome is cns_gate.GateOutcome.PASS
+
+
+def test_the_connector_tells_the_gate_which_end_it_is_judging():
+    seen = []
+
+    class Tells(BaseGate):
+        name = "tells"
+        positions = BOTH
+
+        def check_at(self, position, event, state, manifest):
+            seen.append(position)
+            return True, ""
+
+    event = Event("observation", {"n": 1}, "p1")
+    PerceiveCnsGate(Tells(), "alpha").check(Judged(event, State(), manifest()))
+    PerceiveCnsGate(Tells(), "omega").check(Judged(event, produced(event), manifest()))
+    assert seen == ["alpha", "omega"]
 
 
 def test_the_refusal_is_a_value_error_and_says_what_to_do():
-    from perceive.gates import SentinelGate
+    from perceive.clinical import VitalsPlausibilityGate
 
     with pytest.raises(ValueError) as raised:  # callers that catch a bad position still work
-        PerceiveCnsGate(SentinelGate(), "omega")
+        PerceiveCnsGate(VitalsPlausibilityGate(), "omega")
     message = str(raised.value)
-    assert "sentinel" in message and "omega" in message and "alpha" in message
+    assert "vitals_plausible" in message and "omega" in message and "alpha" in message
     assert "positions" in message
     assert "compares the event with itself" in message
 

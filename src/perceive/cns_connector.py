@@ -25,6 +25,11 @@ gate that has not declared OMEGA is refused there with GatePositionNotSupported
 when the wrapper is built, instead of being judged and waved through. A gate
 that declares nothing is ALPHA only.
 
+A gate that is declared for both ends and needs to know which one it is judging
+defines ``check_at(position, event, state, manifest)``. The connector tells it,
+so the gate never has to guess its end from the state. Other gates are judged
+with ``check``, as before.
+
 CNS is imported only when a connector is built. Without it, building one raises
 CnsNotInstalled with the install command, and nothing else in PERCEIVE changes.
 """
@@ -160,6 +165,7 @@ class PerceiveCnsGate:
             )
         self._cns = cns
         self._gate = gate
+        self._end = position
         self.name = f"perceive.{gate.name}"
         self.position = cns.GatePosition.ALPHA if position == _ALPHA else cns.GatePosition.OMEGA
 
@@ -175,7 +181,11 @@ class PerceiveCnsGate:
                 reason=f"fault: content cannot be bound ({exc})",
             )
         try:
-            ok, reason = self._gate.check(candidate.event, candidate.state, candidate.manifest)
+            judge = getattr(self._gate, "check_at", None)
+            if callable(judge):
+                ok, reason = judge(self._end, candidate.event, candidate.state, candidate.manifest)
+            else:
+                ok, reason = self._gate.check(candidate.event, candidate.state, candidate.manifest)
         except Exception as exc:  # a gate that raises is a fault, never a pass
             return cns.GateResult(
                 gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,

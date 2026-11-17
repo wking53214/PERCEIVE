@@ -19,8 +19,10 @@ import perceive.clinical as clinical_module
 import perceive.gates as gates_module
 from perceive.clinical import MonotonicTimeGate, VitalsPlausibilityGate
 from perceive.gates import (
+    ALPHA,
     ALPHA_ONLY,
     BOTH,
+    OMEGA,
     OMEGA_ONLY,
     BaseGate,
     BoundaryGate,
@@ -85,18 +87,19 @@ def events():
 
 @pytest.mark.parametrize(
     "make",
-    [BoundaryGate, InvariantValidatorGate, FortressGate, CitadelGate, MicroPatchGate, MonotonicTimeGate],
+    [BoundaryGate, InvariantValidatorGate, FortressGate, CitadelGate, MicroPatchGate, MonotonicTimeGate, SentinelGate],
     ids=lambda c: c.__name__,
 )
 def test_a_gate_declared_for_both_ends_gives_the_same_verdict_at_both(make):
     """The claim behind `positions = BOTH`: the verdict does not depend on whether
-    the state is the one before the event or the one after it."""
+    the state is the one before the event or the one after it. Each end is judged
+    the way the connector judges it, with the end told to the gate."""
     gate = make()
     for m_name, manifest in manifests().items():
         for p_name, prior in priors().items():
             for e_name, event in events().items():
-                before = gate.check(event, prior, manifest)
-                after = gate.check(event, produced(event, prior), manifest)
+                before = gate.check_at(ALPHA, event, prior, manifest)
+                after = gate.check_at(OMEGA, event, produced(event, prior), manifest)
                 assert before == after, f"{gate.name}: {m_name} / {p_name} / {e_name}: {before} != {after}"
 
 
@@ -111,24 +114,57 @@ def test_the_vitals_gate_refuses_a_jump_before_the_work_and_passes_it_after():
     assert gate.check(jump, produced(jump, prior), manifest)[0] is True
 
 
-def test_the_sentinel_gate_refuses_backdating_before_the_work_and_passes_it_after():
-    """Why SentinelGate is ALPHA only (the same flaw PER-5 fixed in MonotonicTimeGate)."""
+def test_the_end_must_be_told_to_the_sentinel_gate_not_left_to_the_state():
+    """Why SentinelGate has check_at. The plain check() on the state after the work
+    compares the event with itself and passes a backdated event. Told its end, the
+    gate refuses it, exactly as it does before the work."""
     prior = priors()["one-event"]
     late = events()["backdated"]
     gate = SentinelGate()
     manifest = manifests()["sealed"]
+    post = produced(late, prior)
     assert gate.check(late, prior, manifest)[0] is False
-    assert gate.check(late, produced(late, prior), manifest)[0] is True
+    assert gate.check(late, post, manifest)[0] is True, "the naive call is still blind"
+    assert gate.check_at(OMEGA, late, post, manifest)[0] is False
 
 
-def test_the_sentinel_history_limit_counts_one_more_after_the_work():
-    """The other way the verdict moves: the same limit, one event higher."""
+@pytest.mark.parametrize("prior_len", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("replay", [False, True], ids=["new-event", "exact-replay-of-last"])
+def test_the_history_limit_is_the_same_at_both_ends(prior_len, replay):
+    """The case that rules out guessing the end from the state: an event that is an
+    exact replay of the last recorded one looks the same before and after the
+    work. Inferring the end would let it through at the limit."""
     gate = SentinelGate(max_history=3)
-    prior = State(history=[Event("observation", {}, "p1", timestamp=f"2026-01-01T00:0{i}:00") for i in (1, 2)])
-    event = Event("observation", {}, "p1", timestamp="2026-01-01T00:09:00")
+    history = [
+        Event("observation", {"i": i}, "p1", timestamp=f"2026-01-01T00:0{i + 1}:00")
+        for i in range(prior_len)
+    ]
+    if replay and history:
+        event = copy.deepcopy(history[-1])
+    else:
+        event = Event("observation", {"i": 99}, "p1", timestamp="2026-01-01T00:09:00")
+    prior = State(history=history)
     manifest = manifests()["sealed"]
-    assert gate.check(event, prior, manifest)[0] is True
-    assert gate.check(event, produced(event, prior), manifest)[0] is False
+    expected = prior_len < 3
+    assert gate.check_at(ALPHA, event, prior, manifest)[0] is expected
+    assert gate.check_at(OMEGA, event, produced(event, prior), manifest)[0] is expected
+
+
+def test_the_sentinel_gate_refuses_a_state_that_does_not_end_with_the_event_at_omega():
+    gate = SentinelGate()
+    event = events()["clean"]
+    manifest = manifests()["sealed"]
+    assert gate.check_at(OMEGA, event, State(), manifest)[0] is False
+    other = State(history=[Event("observation", {"other": 1}, "p1", timestamp="2026-01-01T00:05:00")])
+    assert gate.check_at(OMEGA, event, other, manifest)[0] is False
+
+
+def test_a_gate_that_does_not_care_about_its_end_is_judged_with_check():
+    gate = FortressGate()
+    event = events()["forbidden"]
+    prior = priors()["empty"]
+    manifest = manifests()["sealed"]
+    assert gate.check_at(ALPHA, event, prior, manifest) == gate.check(event, prior, manifest)
 
 
 # --- nothing is left to a silent default -------------------------------------
@@ -157,7 +193,7 @@ def test_the_declarations_are_what_the_code_supports():
         FortressGate: BOTH,
         CitadelGate: BOTH,
         MicroPatchGate: BOTH,
-        SentinelGate: ALPHA_ONLY,
+        SentinelGate: BOTH,
         VitalsPlausibilityGate: ALPHA_ONLY,
         MonotonicTimeGate: BOTH,
     }
