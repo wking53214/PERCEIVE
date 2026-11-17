@@ -17,6 +17,14 @@ Verdict mapping:
 Every verdict is bound to the content it judged through cns.gate.subject_digest,
 so a verdict cannot be lifted onto a different event or state.
 
+A gate is only wrapped at an end it declares (its ``positions``). The wrapper
+does not change what the gate looks at, and a gate that compares the event with
+the state before it sees, at OMEGA, a state that already contains the event.
+Such a gate compares the event with itself and passes what ALPHA refuses. So a
+gate that has not declared OMEGA is refused there with GatePositionNotSupported
+when the wrapper is built, instead of being judged and waved through. A gate
+that declares nothing is ALPHA only.
+
 CNS is imported only when a connector is built. Without it, building one raises
 CnsNotInstalled with the install command, and nothing else in PERCEIVE changes.
 """
@@ -28,11 +36,14 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Dict
 
-from .gates import BaseGate
+from .gates import ALPHA as _ALPHA
+from .gates import OMEGA as _OMEGA
+from .gates import BaseGate, positions_of
 from .models import Event, Manifest, State
 
 __all__ = [
     "CnsNotInstalled",
+    "GatePositionNotSupported",
     "Judged",
     "PerceiveCnsGate",
     "cns_available",
@@ -40,12 +51,38 @@ __all__ = [
 
 INSTALL_HINT = "pip install 'perceive[cns]'"
 
-_ALPHA = "alpha"
-_OMEGA = "omega"
-
 
 class CnsNotInstalled(ImportError):
     """Raised when cns.gate cannot be imported, or is too old to use."""
+
+
+class GatePositionNotSupported(ValueError):
+    """Raised when a gate is wrapped at an end it does not declare.
+
+    A ValueError, so code that already catches a bad position keeps working.
+    """
+
+    def __init__(self, gate_name: str, position: str, supported: Any) -> None:
+        self.gate_name = gate_name
+        self.position = position
+        self.supported = frozenset(supported)
+        ends = ", ".join(sorted(self.supported)) or "none"
+        if position == _OMEGA:
+            why = (
+                "At omega the state already contains the event, so a gate that compares the "
+                "event with the state before it compares the event with itself and can pass "
+                "what alpha refuses."
+            )
+        else:
+            why = (
+                "At alpha the state is the one before the event, so a gate written to read "
+                "the state the event produces has nothing to read yet."
+            )
+        super().__init__(
+            f"gate {gate_name!r} cannot be judged at the {position} end: it declares {ends}. "
+            f"{why} Declare an end (the gate's `positions`) only after checking that the gate "
+            "gives the right verdict there."
+        )
 
 
 def _cns_gate() -> ModuleType:
@@ -116,6 +153,11 @@ class PerceiveCnsGate:
         cns = _cns_gate()
         if position not in (_ALPHA, _OMEGA):
             raise ValueError(f"position must be 'alpha' or 'omega', not {position!r}")
+        supported = positions_of(gate)
+        if position not in supported:
+            raise GatePositionNotSupported(
+                getattr(gate, "name", type(gate).__name__), position, supported
+            )
         self._cns = cns
         self._gate = gate
         self.name = f"perceive.{gate.name}"

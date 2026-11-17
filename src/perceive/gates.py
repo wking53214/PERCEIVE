@@ -17,7 +17,7 @@ adding a gate can only ever make the system more conservative, never less.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Protocol, Sequence, Tuple, Union
 
 from .models import CheckOutcome, Event, Manifest, State
 
@@ -29,6 +29,36 @@ DRIFT_MARKERS = ("drift", "deviation", "divergence", "anomaly")
 
 #: Recovered threshold.
 MAX_REQUEST_CHARS = 500
+
+#: The two ends of a decision at which a gate can be judged outside the kernel.
+#: ALPHA judges the proposed event against the state it would change. OMEGA
+#: judges the state the work would produce, so that state already contains the
+#: event. The kernel itself always judges gates at ALPHA.
+ALPHA = "alpha"
+OMEGA = "omega"
+ALPHA_ONLY: FrozenSet[str] = frozenset({ALPHA})
+OMEGA_ONLY: FrozenSet[str] = frozenset({OMEGA})
+BOTH: FrozenSet[str] = frozenset({ALPHA, OMEGA})
+
+Positions = Union[str, Iterable[str]]
+
+
+def _normalise_positions(value: Positions, owner: str) -> FrozenSet[str]:
+    """Turn a declaration into a set of known ends, or fail loudly.
+
+    A typo must not quietly become "supports nothing" or "supports everything",
+    so an unknown end or an empty declaration is an error, not a default.
+    """
+    items = {value} if isinstance(value, str) else set(value)
+    unknown = items - BOTH
+    if unknown:
+        raise ValueError(
+            f"{owner} declares unknown position(s) {sorted(map(repr, unknown))}; "
+            f"the ends are {ALPHA!r} and {OMEGA!r}"
+        )
+    if not items:
+        raise ValueError(f"{owner} declares no position, so it could be judged nowhere")
+    return frozenset(items)
 
 
 class Gate(Protocol):
@@ -50,25 +80,79 @@ class BaseGate:
 
     name = "base"
 
+    #: The ends at which this gate's own logic gives a trustworthy verdict.
+    #:
+    #: The default is ALPHA only, on purpose. The kernel judges every gate
+    #: before the work, against the state before the event, so that is what a
+    #: gate is normally written for. At OMEGA the state already contains the
+    #: event, so a gate that compares the event with the state before it
+    #: (a plausibility step, a clock check, a size limit) compares the event
+    #: with itself and passes what ALPHA refuses. A gate must not be used at an
+    #: end nobody has checked, so a gate declares an end only after showing it
+    #: gives the same verdict on the state before and after the event.
+    positions: FrozenSet[str] = ALPHA_ONLY
+
     def __init__(
         self,
         rules: Optional[Sequence[Tuple[str, Callable[[Event, State, Manifest], bool]]]] = None,
+        positions: Optional[Positions] = None,
     ) -> None:
         self.rules: List[Tuple[str, Callable[[Event, State, Manifest], bool]]] = list(
             rules or []
         )
+        # Keyed by the identity of each rule entry, so two rules with the same
+        # name cannot share a declaration. Rules handed in at construction are
+        # not in here, and a rule with no entry here is ALPHA only.
+        self._rule_positions: Dict[int, FrozenSet[str]] = {}
+        if positions is not None:
+            self.positions = _normalise_positions(positions, f"gate {self.name!r}")
 
     def add_rule(
-        self, name: str, predicate: Callable[[Event, State, Manifest], bool]
+        self,
+        name: str,
+        predicate: Callable[[Event, State, Manifest], bool],
+        positions: Optional[Positions] = None,
     ) -> "BaseGate":
-        self.rules.append((name, predicate))
+        """Add a named rule. A rule is ALPHA only unless it declares otherwise."""
+        entry = (name, predicate)
+        self.rules.append(entry)
+        if positions is not None:
+            self._rule_positions[id(entry)] = _normalise_positions(
+                positions, f"rule {name!r} of gate {self.name!r}"
+            )
         return self
+
+    def supported_positions(self) -> FrozenSet[str]:
+        """The ends this gate instance may be judged at.
+
+        The gate's own declaration, narrowed by every rule it holds: a gate is
+        only as position-safe as its least position-safe rule. An empty result
+        means the gate and its rules share no end.
+        """
+        supported = _normalise_positions(self.positions, f"gate {self.name!r}")
+        declared = getattr(self, "_rule_positions", {})
+        for entry in getattr(self, "rules", ()):
+            supported = supported & declared.get(id(entry), ALPHA_ONLY)
+        return supported
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         for rule_name, predicate in self.rules:
             if not predicate(event, state, manifest):
                 return False, f"rule {rule_name!r} denied"
         return True, ""
+
+
+def positions_of(gate: Any) -> FrozenSet[str]:
+    """The ends a gate may be judged at, for any gate-shaped object.
+
+    A gate that says nothing is ALPHA only, because that is the only end the
+    kernel has ever judged it at.
+    """
+    method = getattr(gate, "supported_positions", None)
+    if callable(method):
+        return frozenset(method())
+    declared = getattr(gate, "positions", ALPHA_ONLY)
+    return _normalise_positions(declared, f"gate {getattr(gate, 'name', type(gate).__name__)!r}")
 
 
 def _text_of(event: Event) -> str:
@@ -92,6 +176,8 @@ class BoundaryGate(BaseGate):
     """
 
     name = "boundary"
+    #: Reads only the event. Nothing here depends on the state.
+    positions = BOTH
 
     def __init__(self, max_chars: int = MAX_REQUEST_CHARS) -> None:
         super().__init__()
@@ -128,6 +214,8 @@ class InvariantValidatorGate(BaseGate):
     """
 
     name = "invariant_validator"
+    #: Reads only the manifest. Nothing here depends on the state.
+    positions = BOTH
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         if manifest.is_expired():
@@ -153,6 +241,8 @@ class FortressGate(BaseGate):
     """The ingestion perimeter. Rejects forbidden content outright."""
 
     name = "fortress"
+    #: Reads only the event.
+    positions = BOTH
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         text = _text_of(event)
@@ -176,6 +266,8 @@ class CitadelGate(BaseGate):
     """
 
     name = "citadel"
+    #: Reads only the event and the manifest.
+    positions = BOTH
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         text = _text_of(event)
@@ -201,6 +293,10 @@ class SentinelGate(BaseGate):
     """The watchdog. Detects drift against the accumulated history."""
 
     name = "sentinel"
+    #: Compares the event with the last recorded event and counts history.
+    #: At OMEGA the last recorded event IS the event, so a backdated event
+    #: passes, and the count is one higher than the state the event met.
+    positions = ALPHA_ONLY
 
     def __init__(self, max_history: int = 10_000) -> None:
         super().__init__()
@@ -242,6 +338,8 @@ class MicroPatchGate(BaseGate):
     """
 
     name = "micropatch"
+    #: Counts its own rules. Each rule it holds still narrows this per rule.
+    positions = BOTH
 
     def __init__(self, max_active: int = 32) -> None:
         super().__init__()

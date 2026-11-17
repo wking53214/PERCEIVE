@@ -6,8 +6,14 @@ import sys
 
 import pytest
 
-from perceive.cns_connector import CnsNotInstalled, Judged, PerceiveCnsGate, cns_available
-from perceive.gates import BaseGate
+from perceive.cns_connector import (
+    CnsNotInstalled,
+    GatePositionNotSupported,
+    Judged,
+    PerceiveCnsGate,
+    cns_available,
+)
+from perceive.gates import BOTH, OMEGA_ONLY, BaseGate
 from perceive.models import Event, Manifest, State
 
 if os.environ.get("PERCEIVE_REQUIRE_CNS") == "1":  # CI: a missing cns is a failure, not a skip
@@ -21,12 +27,18 @@ def manifest():
 
 
 def refuse_marked(name="no_marked"):
-    """A gate that refuses any event whose delta carries a 'bad' key."""
-    return BaseGate(rules=[(name, lambda e, s, m: "bad" not in e.delta)])
+    """A gate that refuses any event whose delta carries a 'bad' key.
+
+    It reads only the event, so it gives the same verdict at either end."""
+    gate = BaseGate(positions=BOTH)
+    gate.add_rule(name, lambda e, s, m: "bad" not in e.delta, positions=BOTH)
+    return gate
 
 
 class Fixed:
     """A stub gate returning whatever its function returns, for odd verdicts."""
+
+    positions = BOTH
 
     def __init__(self, name, fn):
         self.name = name
@@ -60,8 +72,12 @@ def test_alpha_refuses_a_blocked_event_with_the_gate_reason():
 
 
 def test_omega_judges_the_state_the_work_would_produce():
-    no_bad_history = BaseGate(
-        rules=[("no_bad_history", lambda e, s, m: not any("bad" in ev.delta for ev in s.history))]
+    # Written to read the post-state's history, so it is an OMEGA gate.
+    no_bad_history = BaseGate(positions=OMEGA_ONLY)
+    no_bad_history.add_rule(
+        "no_bad_history",
+        lambda e, s, m: not any("bad" in ev.delta for ev in s.history),
+        positions=OMEGA_ONLY,
     )
     gate = PerceiveCnsGate(no_bad_history, position="omega")
     result_state = State(history=[Event("observation", {"bad": 1}, "p1")])
@@ -170,3 +186,108 @@ def test_missing_cns_raises_with_the_install_command(monkeypatch):
     assert cns_available() is False
     with pytest.raises(CnsNotInstalled, match="pip install 'perceive\\[cns\\]'"):
         PerceiveCnsGate(refuse_marked(), position="alpha")
+
+
+# --- a gate is only wrapped at an end it declares ---------------------------
+
+
+def _jump_case():
+    """A heart-rate jump of 69% against a prior reading. The limit is 60%."""
+    ok = {"heart_rate": 130.0, "respiratory_rate": 40.0, "oxygen_saturation": 97.0, "temperature": 37.0}
+    prior = State(
+        history=[Event("observation", {"vitals": ok}, "p1", timestamp="2026-01-01T00:05:00")],
+        context={"vitals": ok},
+    )
+    jump = Event(
+        "observation", {"vitals": {**ok, "heart_rate": 220.0}}, "p1", timestamp="2026-01-01T00:10:00"
+    )
+    return prior, jump
+
+
+def test_a_gate_that_compares_with_prior_state_is_refused_at_omega():
+    """The reproduced bypass: a jump ALPHA refuses passed at OMEGA, because the
+    state already held the new reading. It is now refused when the wrapper is built."""
+    from perceive.clinical import VitalsPlausibilityGate
+    from perceive.models import Manifest
+
+    prior, jump = _jump_case()
+    pediatric = Manifest("M", "v1", [], []).seal()
+    alpha = PerceiveCnsGate(VitalsPlausibilityGate(), "alpha").check(Judged(jump, prior, pediatric))
+    assert alpha.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+
+    with pytest.raises(GatePositionNotSupported) as raised:
+        PerceiveCnsGate(VitalsPlausibilityGate(), "omega")
+    assert raised.value.gate_name == "vitals_plausible"
+    assert raised.value.position == "omega"
+    assert raised.value.supported == frozenset({"alpha"})
+
+
+def test_the_sentinel_gate_is_refused_at_omega():
+    from perceive.gates import SentinelGate
+
+    with pytest.raises(GatePositionNotSupported):
+        PerceiveCnsGate(SentinelGate(), "omega")
+    assert PerceiveCnsGate(SentinelGate(), "alpha").name == "perceive.sentinel"
+
+
+def test_the_refusal_is_a_value_error_and_says_what_to_do():
+    from perceive.gates import SentinelGate
+
+    with pytest.raises(ValueError) as raised:  # callers that catch a bad position still work
+        PerceiveCnsGate(SentinelGate(), "omega")
+    message = str(raised.value)
+    assert "sentinel" in message and "omega" in message and "alpha" in message
+    assert "positions" in message
+    assert "compares the event with itself" in message
+
+
+@pytest.mark.parametrize("make", ["BoundaryGate", "InvariantValidatorGate", "FortressGate", "CitadelGate", "MicroPatchGate"])
+def test_gates_that_read_only_the_event_or_manifest_can_be_judged_at_omega(make):
+    import perceive.gates as gates
+
+    gate = getattr(gates, make)()
+    assert PerceiveCnsGate(gate, "omega").position is cns_gate.GatePosition.OMEGA
+    assert PerceiveCnsGate(gate, "alpha").position is cns_gate.GatePosition.ALPHA
+
+
+def test_an_omega_gate_is_refused_at_alpha():
+    gate = BaseGate(positions=OMEGA_ONLY)
+    gate.add_rule("reads_post_state", lambda e, s, m: True, positions=OMEGA_ONLY)
+    assert PerceiveCnsGate(gate, "omega").position is cns_gate.GatePosition.OMEGA
+    with pytest.raises(GatePositionNotSupported) as raised:
+        PerceiveCnsGate(gate, "alpha")
+    # The reason must fit the direction: this is not the self-comparison problem.
+    assert "nothing to read yet" in str(raised.value)
+    assert "compares the event with itself" not in str(raised.value)
+
+
+def test_a_gate_that_declares_nothing_is_alpha_only():
+    class Silent:
+        name = "silent"
+
+        def check(self, event, state, manifest):
+            return True, ""
+
+    assert PerceiveCnsGate(Silent(), "alpha").name == "perceive.silent"
+    with pytest.raises(GatePositionNotSupported):
+        PerceiveCnsGate(Silent(), "omega")
+
+
+def test_a_rule_nobody_declared_stops_a_both_gate_being_used_at_omega():
+    """A caller's rule may read the state, so it must not widen the gate it joins."""
+    from perceive.gates import FortressGate
+
+    gate = FortressGate()
+    gate.add_rule("reads_prior_state", lambda e, s, m: len(s.history) < 5)
+    with pytest.raises(GatePositionNotSupported):
+        PerceiveCnsGate(gate, "omega")
+    assert PerceiveCnsGate(gate, "alpha").position is cns_gate.GatePosition.ALPHA
+
+
+def test_a_malformed_declaration_fails_loudly_when_wrapped():
+    class Typo(BaseGate):
+        name = "typo"
+        positions = {"midle"}
+
+    with pytest.raises(ValueError, match="unknown position"):
+        PerceiveCnsGate(Typo(), "alpha")
