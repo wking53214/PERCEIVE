@@ -135,6 +135,18 @@ class BaseGate:
             supported = supported & declared.get(id(entry), ALPHA_ONLY)
         return supported
 
+    def check_at(
+        self, position: str, event: Event, state: State, manifest: Manifest
+    ) -> Tuple[bool, str]:
+        """Judge at an explicit end of the decision.
+
+        The default is ``check``, which is right for a gate whose verdict does
+        not depend on the end. A gate that does depend on it overrides this, so
+        it is told its end instead of guessing it from the state: an event that
+        replays the last recorded one looks the same at both ends.
+        """
+        return self.check(event, state, manifest)
+
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         for rule_name, predicate in self.rules:
             if not predicate(event, state, manifest):
@@ -293,33 +305,54 @@ class SentinelGate(BaseGate):
     """The watchdog. Detects drift against the accumulated history."""
 
     name = "sentinel"
-    #: Compares the event with the last recorded event and counts history.
-    #: At OMEGA the last recorded event IS the event, so a backdated event
-    #: passes, and the count is one higher than the state the event met.
-    positions = ALPHA_ONLY
+    #: Reads only the history the event met. Judged at OMEGA through check_at,
+    #: the event is dropped from the end of the state's history first, so it is
+    #: never compared with itself and the count is the same as at ALPHA. The end
+    #: is told to the gate, not guessed: a replay of the last event looks the
+    #: same at both ends.
+    positions = BOTH
 
     def __init__(self, max_history: int = 10_000) -> None:
         super().__init__()
         self.max_history = max_history
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
+        """Judge before the work: the state's history is the history the event meets."""
+        return self._judge(event, state.history, state, manifest)
+
+    def check_at(
+        self, position: str, event: Event, state: State, manifest: Manifest
+    ) -> Tuple[bool, str]:
+        if position != OMEGA:
+            return self.check(event, state, manifest)
+        # Judged on the result, the history already ends with the event. The
+        # history the event met is everything before it. A state that does not
+        # end with the event is not the state this event produced.
+        if not state.history or state.history[-1] != event:
+            return False, "state does not end with the judged event"
+        return self._judge(event, state.history[:-1], state, manifest)
+
+    def _judge(
+        self, event: Event, met: Sequence[Event], state: State, manifest: Manifest
+    ) -> Tuple[bool, str]:
+        """Judge the event against ``met``, the history it arrived at."""
         text = _text_of(event)
         for marker in DRIFT_MARKERS:
             if re.search(rf"\b{marker}\w*\b", text):
                 return False, f"drift marker {marker!r} detected"
 
-        if len(state.history) >= self.max_history:
+        if len(met) >= self.max_history:
             return False, (
-                f"history has reached {len(state.history)} events; refusing to "
+                f"history has reached {len(met)} events; refusing to "
                 f"grow an unbounded audit surface"
             )
 
         # Monotonic time. Out-of-order events make the ledger unorderable and
         # therefore unusable as evidence.
-        if state.history and event.timestamp < state.history[-1].timestamp:
+        if met and event.timestamp < met[-1].timestamp:
             return False, (
                 f"event timestamp {event.timestamp} precedes the last recorded "
-                f"event {state.history[-1].timestamp}"
+                f"event {met[-1].timestamp}"
             )
         return super().check(event, state, manifest)
 
