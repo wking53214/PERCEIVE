@@ -156,7 +156,8 @@ def test_a_raising_gate_is_a_fault_not_a_pass():
 
 def test_a_non_boolean_verdict_is_a_fault_not_a_pass():
     gate = PerceiveCnsGate(Fixed("odd", lambda e, s, m: ("yes", "r")), position="omega")
-    result = gate.check(judged({"n": 1}))
+    event = Event("observation", {"n": 1}, "p1")
+    result = gate.check(Judged(event, produced(event), manifest()))
     assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
     assert "non-bool" in result.reason
 
@@ -314,3 +315,76 @@ def test_a_malformed_declaration_fails_loudly_when_wrapped():
 
     with pytest.raises(ValueError, match="unknown position"):
         PerceiveCnsGate(Typo(), "alpha")
+
+
+# --- continuity and content stability -------------------------------------
+
+def _prior():
+    return State(history=[Event("observation", {"a": 1}, "p1", timestamp="2026-01-01T00:00:00")])
+
+
+def test_omega_with_a_prior_state_requires_exact_continuity():
+    """Integrity is not continuity: a state that ends with the event but lost
+    earlier history is not the state this event produced."""
+    prior = _prior()
+    event = Event("observation", {"n": 1}, "p1", timestamp="2026-01-02T00:00:00")
+    gate = PerceiveCnsGate(refuse_marked(), "omega")
+    good = gate.check(Judged(event, produced(event, prior), manifest(), before=prior))
+    assert good.outcome is cns_gate.GateOutcome.PASS
+    for post in (
+        State(history=[event]),  # earlier history dropped
+        State(history=[Event("observation", {"a": 2}, "p1"), event]),  # rewritten
+        State(history=prior.history + [Event("observation", {}, "p1"), event]),  # inserted
+    ):
+        result = gate.check(Judged(event, post, manifest(), before=prior))
+        assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+        assert "prior state" in result.reason
+        assert result.bound()
+
+
+def test_require_before_refuses_an_omega_candidate_with_no_prior_state():
+    event = Event("observation", {"n": 1}, "p1")
+    strict = PerceiveCnsGate(refuse_marked(), "omega", require_before=True)
+    result = strict.check(Judged(event, produced(event), manifest()))
+    assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+    assert "continuity" in result.reason
+    lax = PerceiveCnsGate(refuse_marked(), "omega")
+    assert lax.check(Judged(event, produced(event), manifest())).outcome is cns_gate.GateOutcome.PASS
+
+
+def test_the_prior_state_is_part_of_the_bound_content():
+    prior = _prior()
+    event = Event("observation", {"n": 1}, "p1", timestamp="2026-01-02T00:00:00")
+    gate = PerceiveCnsGate(refuse_marked(), "omega")
+    one = gate.check(Judged(event, produced(event, prior), manifest(), before=prior))
+    other = State(history=[Event("observation", {"a": 9}, "p1", timestamp="2026-01-01T00:00:00")])
+    two = gate.check(Judged(event, produced(event, other), manifest(), before=other))
+    assert one.subject_digest != two.subject_digest
+
+
+def test_a_gate_cannot_change_what_the_caller_holds():
+    """The gate judges copies, so a gate that scribbles on its inputs is harmless."""
+    def scribble(e, s, m):
+        e.delta["bad"] = True
+        s.history.clear()
+        return True, ""
+    event = Event("observation", {"n": 1}, "p1")
+    post = produced(event)
+    result = PerceiveCnsGate(Fixed("scribbler", scribble), "omega").check(
+        Judged(event, post, manifest()))
+    assert result.outcome is cns_gate.GateOutcome.PASS
+    assert event.delta == {"n": 1} and post.history == [event]
+
+
+def test_content_changed_while_the_gate_ran_is_a_fault_not_a_bound_pass():
+    event = Event("observation", {"n": 1}, "p1")
+    post = produced(event)
+
+    def racing(e, s, m):
+        event.delta["n"] = 2  # another thread changes the caller's event mid-judgment
+        return True, ""
+    result = PerceiveCnsGate(Fixed("racing", racing), "omega").check(
+        Judged(event, post, manifest()))
+    assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+    assert "changed while the gate ran" in result.reason
+    assert result.bound()

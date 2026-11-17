@@ -36,10 +36,11 @@ CnsNotInstalled with the install command, and nothing else in PERCEIVE changes.
 
 from __future__ import annotations
 
+import copy
 import importlib
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .gates import ALPHA as _ALPHA
 from .gates import OMEGA as _OMEGA
@@ -123,19 +124,26 @@ class Judged:
     """Everything a PERCEIVE gate needs to judge, as one candidate.
 
     At the ALPHA end, `state` is the state before the event is applied. At the
-    OMEGA end, `state` is the state the event would produce, so its history
-    must end with `event`; any other state is refused.
+    OMEGA end, `state` is the state the event would produce.
+
+    `before` is the state the event was applied to. At OMEGA, when it is given,
+    the post-state must be exactly `before`'s history plus `event`: a state that
+    merely ends with the event, but dropped or rewrote earlier history, is
+    refused. Without `before` only the weaker check is possible (the history
+    ends with the event). Build the wrapper with `require_before=True` to make
+    `before` mandatory at OMEGA.
     """
 
     event: Event
     state: State
     manifest: Manifest
+    before: Optional[State] = None
 
 
 def _content(judged: Judged) -> Dict[str, Any]:
     """The judged content as plain values, so every consumer digests it alike."""
     event = judged.event
-    return {
+    content = {
         "event": {
             "event_type": event.event_type,
             "delta": event.delta,
@@ -149,12 +157,15 @@ def _content(judged: Judged) -> Dict[str, Any]:
             "hash": judged.manifest.hash,
         },
     }
+    if judged.before is not None:  # absent when not given, so older digests are unchanged
+        content["before"] = judged.before.to_dict()
+    return content
 
 
 class PerceiveCnsGate:
     """A PERCEIVE gate exposed as a CNS gate at the position the caller picks."""
 
-    def __init__(self, gate: BaseGate, position: str = _ALPHA) -> None:
+    def __init__(self, gate: BaseGate, position: str = _ALPHA, require_before: bool = False) -> None:
         cns = _cns_gate()
         if position not in (_ALPHA, _OMEGA):
             raise ValueError(f"position must be 'alpha' or 'omega', not {position!r}")
@@ -166,50 +177,76 @@ class PerceiveCnsGate:
         self._cns = cns
         self._gate = gate
         self._end = position
+        self._require_before = require_before
         self.name = f"perceive.{gate.name}"
         self.position = cns.GatePosition.ALPHA if position == _ALPHA else cns.GatePosition.OMEGA
 
     def check(self, candidate: Judged) -> Any:
-        """Judge one candidate and return a CNS GateResult bound to its content."""
+        """Judge one candidate and return a CNS GateResult bound to its content.
+
+        The gate judges private copies, so it cannot change what the caller holds.
+        The caller's objects are digested before and again after the judgment; if
+        they differ (something changed them while the gate ran), the verdict is a
+        fault, because it would otherwise be bound to content that no longer exists.
+        """
         cns = self._cns
         subject = f"perceive:{self.position.value}:{candidate.event.event_type}:{candidate.event.context_id}"
+
+        def breach(reason: str, **bound: Any) -> Any:
+            return cns.GateResult(
+                gate=self.name, position=self.position,
+                outcome=cns.GateOutcome.TERMINAL_BREACH, reason=reason, **bound,
+            )
+
         try:
             digest = cns.subject_digest(_content(candidate))
-        except TypeError as exc:
-            return cns.GateResult(
-                gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
-                reason=f"fault: content cannot be bound ({exc})",
-            )
+            seen = copy.deepcopy((candidate.event, candidate.state, candidate.manifest))
+        except Exception as exc:
+            return breach(f"fault: content cannot be bound ({exc})")
+        bound = {"subject": subject, "subject_digest": digest}
+
+        if self.position is cns.GatePosition.OMEGA:
+            problem = self._continuity_problem(candidate)
+            if problem:
+                return breach(problem, **bound)
+
+        event, state, manifest = seen
         try:
             judge = getattr(self._gate, "check_at", None)
             if callable(judge):
-                ok, reason = judge(self._end, candidate.event, candidate.state, candidate.manifest)
+                ok, reason = judge(self._end, event, state, manifest)
             else:
-                ok, reason = self._gate.check(candidate.event, candidate.state, candidate.manifest)
+                ok, reason = self._gate.check(event, state, manifest)
         except Exception as exc:  # a gate that raises is a fault, never a pass
-            return cns.GateResult(
-                gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
-                reason=f"fault: gate raised {type(exc).__name__}: {exc}",
-                subject=subject, subject_digest=digest,
-            )
+            return breach(f"fault: gate raised {type(exc).__name__}: {exc}", **bound)
         if not isinstance(ok, bool):
-            return cns.GateResult(
-                gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
-                reason=f"fault: non-bool verdict {ok!r}", subject=subject, subject_digest=digest,
-            )
-        if ok and self.position is cns.GatePosition.OMEGA:
-            history = candidate.state.history
-            if not history or history[-1] != candidate.event:
-                # The post-state is checked, not taken on trust: the state
-                # the event produced ends with that event.
-                return cns.GateResult(
-                    gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
-                    reason="post-state does not end with the judged event; it is not the "
-                    "state this event produced",
-                    subject=subject, subject_digest=digest,
-                )
+            return breach(f"fault: non-bool verdict {ok!r}", **bound)
+
+        try:
+            unchanged = cns.subject_digest(_content(candidate)) == digest
+        except Exception:
+            unchanged = False
+        if not unchanged:
+            return breach("fault: the judged content changed while the gate ran", **bound)
+
         outcome = cns.GateOutcome.PASS if ok else cns.GateOutcome.TERMINAL_BREACH
         return cns.GateResult(
             gate=self.name, position=self.position, outcome=outcome,
-            reason=reason or "", subject=subject, subject_digest=digest,
+            reason=reason or "", **bound,
         )
+
+    def _continuity_problem(self, candidate: Judged) -> str:
+        """Why the OMEGA state is not the state this event produced, or ''."""
+        history = candidate.state.history
+        if not history or history[-1] != candidate.event:
+            return ("post-state does not end with the judged event; it is not the "
+                    "state this event produced")
+        before = candidate.before
+        if before is None:
+            if self._require_before:
+                return "no prior state given; the post-state cannot be checked for continuity"
+            return ""
+        if history[:-1] != before.history:
+            return ("post-state is not the prior state plus this event; earlier history "
+                    "was dropped or rewritten")
+        return ""
