@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .gates import BaseGate
+from .gates import BaseGate, ALPHA_ONLY, BOTH
 from .models import Event, Manifest, State
 
 # --------------------------------------------------------------------------
@@ -120,6 +120,11 @@ class VitalsPlausibilityGate(BaseGate):
 
     name = "vitals_plausible"
 
+    #: Compares the incoming reading with the reading already in the state. At
+    #: OMEGA the state already holds the incoming reading, so the change is
+    #: always zero and a jump that ALPHA refuses passes.
+    positions = ALPHA_ONLY
+
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         if "vitals" not in event.delta:
             return True, ""
@@ -146,6 +151,10 @@ class MonotonicTimeGate(BaseGate):
     """Observations must not travel backwards in time."""
 
     name = "monotonic_time"
+
+    #: Places the event last exactly once and checks the whole timeline (PER-5),
+    #: so it refuses backdating on the state before and on the state after.
+    positions = BOTH
 
     def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
         # Judged before the work, the state is the prior history; judged on
