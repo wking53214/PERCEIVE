@@ -173,6 +173,10 @@ invariant is now recorded by qualified name, so the manifest still hashes and
 the degradation is visible in the digest.
 Pinned by `test_unsealable_invariant_still_hashes`.
 
+## Status note, 2026-11-15
+
+This file records how the code was recovered. Where it says "Pinned by" a test or describes the micropatch behavior, `README.md` is the current statement. Two corrections to read alongside it: a discarded patch restores the original event, which is then judged on its own and may be accepted; and the state object `submit` returns is the engine's live state. Neither was re-derived in the original text.
+
 ## The micropatch hole
 
 The archival processing chain ran:
