@@ -184,7 +184,7 @@ def test_missing_cns_raises_with_the_install_command(monkeypatch):
 
     monkeypatch.setattr(importlib, "import_module", no_cns)
     assert cns_available() is False
-    with pytest.raises(CnsNotInstalled, match="pip install 'perceive\\[cns\\]'"):
+    with pytest.raises(CnsNotInstalled, match="pip install 'perceive\\[cns\\] @ git\\+https://github.com/wking53214/PERCEIVE.git@main'"):
         PerceiveCnsGate(refuse_marked(), position="alpha")
 
 
