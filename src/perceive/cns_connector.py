@@ -54,7 +54,10 @@ __all__ = [
     "cns_available",
 ]
 
-INSTALL_HINT = "pip install 'perceive[cns]'"
+INSTALL_HINT = (
+    "pip install 'perceive[cns] @ "
+    "git+https://github.com/wking53214/PERCEIVE.git@main'"
+)
 
 
 class CnsNotInstalled(ImportError):

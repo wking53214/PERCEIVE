@@ -57,7 +57,7 @@ pip install -e ".[dev]"
 
 No runtime dependencies; the standard library only.
 
-The optional CNS connector installs from a clone with `pip install -e ".[cns]"`. Without CNS, the connector's error message tells you to run `pip install 'perceive[cns]'`. Do not run that: this package is not published under that name, and an unrelated public package called `perceive` (a browser-automation helper, version 0.4.2 on 2026-11-19, with no CNS connector) would be installed in its place (EXECUTED: the extras install passed the test suite; the public package's own metadata was read).
+The optional CNS connector installs from a clone with `pip install -e ".[cns]"`. Without CNS, the connector's error message prints the same install from this repository's address, not a bare package name: this package is not published under the name `perceive`, and an unrelated public package with that name (a browser-automation helper) exists on the public package index.
 
 ## Use
 
