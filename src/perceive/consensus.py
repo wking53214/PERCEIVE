@@ -83,6 +83,12 @@ class GovernanceNode:
     gates: Sequence[BaseGate]
     manifest: Manifest
 
+    def __post_init__(self) -> None:
+        if not self.gates:
+            raise ValueError(
+                f"node {self.node_id!r} needs at least one gate: with none, it would allow every event"
+            )
+
     def vote(self, event: Event, state: State) -> NodeVote:
         try:
             allowed, outcomes = evaluate_gates(self.gates, event, state, self.manifest)

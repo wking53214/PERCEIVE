@@ -22,8 +22,6 @@ PROVENANCE.md:
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -36,6 +34,7 @@ from .models import (
     ExecutionMetrics,
     Manifest,
     State,
+    state_fingerprint,
 )
 
 
@@ -148,9 +147,7 @@ class GovernanceKernel:
         valid, _ = self.check_invariants(state, manifest, None)
         if not valid:
             return None
-        return hashlib.sha256(
-            json.dumps(state.to_dict(), sort_keys=True, default=str).encode()
-        ).hexdigest()
+        return state_fingerprint(state)
 
     def clone(self, state_hash: str) -> Optional[State]:
         """Recover a previously accepted state by its content address."""
@@ -237,6 +234,7 @@ class GovernanceKernel:
         manifest: Manifest,
         gates: Sequence[BaseGate],
         patches_applied: Optional[List[str]] = None,
+        patches_rejected: Optional[List[str]] = None,
     ) -> Tuple[State, Optional[str], AuditEntry]:
         """Govern one event and append the decision to the ledger.
 
@@ -276,11 +274,47 @@ class GovernanceKernel:
                 invariant_results=invariant_results,
                 sequence_number=self.sequence_counter,
                 patches_applied=list(patches_applied or []),
+                patches_rejected=list(patches_rejected or []),
             )
         )
 
         returned = new_state if decision is DecisionStatus.ACCEPTED else state
         return returned, state_hash, entry
+
+    def record_resolution(
+        self,
+        subject_id: str,
+        resolved_by: str,
+        reason: str,
+        cleared: str,
+        manifest: Manifest,
+        state: Optional[State] = None,
+    ) -> AuditEntry:
+        """Write a refusal clearance into the ledger.
+
+        Not a transition: the state is unchanged, so ``before`` and ``after``
+        are the same. The entry names who cleared what, and why.
+        """
+        self.sequence_counter += 1
+        held = copy.deepcopy(state) if state is not None else State()
+        event = Event(
+            event_type="refusal_resolution",
+            delta={"resolved_by": resolved_by, "reason": reason, "cleared": cleared},
+            context_id=subject_id,
+        )
+        return self._append_audit(
+            AuditEntry(
+                timestamp=datetime.now().isoformat(),
+                before=held,
+                event=event,
+                manifest_version=manifest.version,
+                manifest_hash=manifest.hash,
+                after=copy.deepcopy(held),
+                decision=DecisionStatus.REFUSAL_RESOLVED,
+                reason=f"{resolved_by}: {reason}",
+                sequence_number=self.sequence_counter,
+            )
+        )
 
     # -- reporting ---------------------------------------------------------
 

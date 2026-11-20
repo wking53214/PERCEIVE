@@ -39,12 +39,12 @@ from __future__ import annotations
 import importlib
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .gates import ALPHA as _ALPHA
 from .gates import OMEGA as _OMEGA
 from .gates import BaseGate, positions_of
-from .models import Event, Manifest, State
+from .models import Event, Manifest, State, state_fingerprint
 
 __all__ = [
     "CnsNotInstalled",
@@ -127,12 +127,15 @@ class Judged:
 
     At the ALPHA end, `state` is the state before the event is applied. At the
     OMEGA end, `state` is the state the event would produce, so its history
-    must end with `event`; any other state is refused.
+    must end with `event` and must hash to `produced_fingerprint`, the
+    `state_hash` the engine returned for that state; any other state, and any
+    OMEGA candidate that carries no fingerprint, is refused.
     """
 
     event: Event
     state: State
     manifest: Manifest
+    produced_fingerprint: Optional[str] = None
 
 
 def _content(judged: Judged) -> Dict[str, Any]:
@@ -201,6 +204,20 @@ class PerceiveCnsGate:
                 reason=f"fault: non-bool verdict {ok!r}", subject=subject, subject_digest=digest,
             )
         if ok and self.position is cns.GatePosition.OMEGA:
+            if candidate.produced_fingerprint is None:
+                return cns.GateResult(
+                    gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
+                    reason="no fingerprint of the produced state was given; the post-state "
+                    "cannot be tied to the state the engine produced",
+                    subject=subject, subject_digest=digest,
+                )
+            if state_fingerprint(candidate.state) != candidate.produced_fingerprint:
+                return cns.GateResult(
+                    gate=self.name, position=self.position, outcome=cns.GateOutcome.TERMINAL_BREACH,
+                    reason="post-state does not match the fingerprint of the state the engine "
+                    "produced; it is not that state",
+                    subject=subject, subject_digest=digest,
+                )
             history = candidate.state.history
             if not history or history[-1] != candidate.event:
                 # The post-state is checked, not taken on trust: the state

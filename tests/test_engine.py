@@ -99,7 +99,7 @@ class TestEngine:
         assert engine.unresolved_refusal("PT_X")
 
     def test_a_refusal_clears_only_by_explicit_resolution(self):
-        engine = PERCEIVEEngine()
+        engine = PERCEIVEEngine(approvers=["dr_a"])
         bad = Event("admission", {"note": "classified"}, "PT_Y", metadata={"authority": "attending"})
         good = Event("observation", {"vitals": PATIENT["vitals"]}, "PT_Y",
                      metadata={"authority": "attending"})
