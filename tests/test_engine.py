@@ -73,7 +73,7 @@ class TestEngine:
         state and accepted, and the patient came back accepted and scored.
         """
         engine = PERCEIVEEngine()
-        patient = {**PATIENT, "patient_id": "PT_REF", "age_months": "classified"}
+        patient = {**PATIENT, "patient_id": "PT_REF", "authority": "classified"}
         _, (admission, observation) = engine.ingest_patient(patient)
         assert not admission.accepted
         assert not observation.accepted
