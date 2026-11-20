@@ -12,13 +12,15 @@ records carrying a reason (the archive stored bare booleans in a tuple) and
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from types import MappingProxyType
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 
 class DecisionStatus(Enum):
@@ -32,6 +34,9 @@ class DecisionStatus(Enum):
     #: archival pipeline had no way to express this, because it never
     #: re-governed patched output.
     PATCH_REJECTED = "PATCH_REJECTED"
+    #: Added: an approver cleared a subject's unresolved refusal. Recorded in
+    #: the ledger so the clearance is as tamper-evident as the refusal was.
+    REFUSAL_RESOLVED = "REFUSAL_RESOLVED"
 
     @property
     def accepted(self) -> bool:
@@ -60,6 +65,68 @@ class State:
         return {
             "history": [asdict(e) for e in self.history],
             "context": self.context,
+        }
+
+
+#: Context keys the engine adds after the kernel has addressed a state. They
+#: are bookkeeping for truncation checks, not part of what the kernel produced,
+#: so they are left out of the fingerprint.
+BOOKKEEPING_KEYS = frozenset({"_history_length"})
+
+
+def state_fingerprint(state: Any) -> str:
+    """Content address of a state: SHA-256 over its sorted JSON form.
+
+    The same value the kernel returns as ``state_hash`` for an accepted state,
+    and the same for the read-only snapshot the engine hands back.
+    """
+    body = state.to_dict()
+    body["context"] = {k: v for k, v in body["context"].items() if k not in BOOKKEEPING_KEYS}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({k: _freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze(v) for v in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {k: _thaw(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(v) for v in value]
+    if isinstance(value, frozenset):
+        return {_thaw(v) for v in value}
+    return value
+
+
+@dataclass(frozen=True)
+class StateSnapshot:
+    """A read-only copy of a governed state.
+
+    What the engine hands to callers. It shares nothing with the engine's own
+    state, and its history is a tuple and its context a read-only mapping, so
+    a caller can neither reach the live state nor change what it was given.
+    ``to_dict`` returns the same plain form as ``State.to_dict``.
+    """
+
+    history: Tuple[Event, ...] = ()
+    context: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+    @classmethod
+    def of(cls, state: "State") -> "StateSnapshot":
+        copied = copy.deepcopy(state)
+        return cls(history=tuple(copied.history), context=_freeze(copied.context))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "history": [asdict(e) for e in self.history],
+            "context": _thaw(self.context),
         }
 
 
@@ -187,6 +254,7 @@ class AuditEntry:
     previous_hash: Optional[str] = None
     audit_hash: Optional[str] = None
     patches_applied: List[str] = field(default_factory=list)
+    patches_rejected: List[str] = field(default_factory=list)
 
     def payload(self) -> Dict[str, Any]:
         """Exactly the bytes the chain hash covers.
@@ -195,7 +263,7 @@ class AuditEntry:
         the fact breaks the chain. ``audit_hash`` itself is excluded because
         it is the output.
         """
-        return {
+        body = {
             "previous_hash": self.previous_hash,
             "timestamp": self.timestamp,
             "event": asdict(self.event) if self.event else None,
@@ -210,6 +278,11 @@ class AuditEntry:
             "invariant_results": [i.to_dict() for i in self.invariant_results],
             "patches_applied": self.patches_applied,
         }
+        # Present only when something was rejected, so every entry written
+        # before this field existed keeps its hash.
+        if self.patches_rejected:
+            body["patches_rejected"] = self.patches_rejected
+        return body
 
     def compute_hash(self) -> str:
         return hashlib.sha256(

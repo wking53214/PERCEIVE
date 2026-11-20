@@ -35,7 +35,7 @@ from .clinical import (
 from .gates import BaseGate, default_gates
 from .kernel import GovernanceKernel
 from .micropatch import MicroPatchEngine
-from .models import AuditEntry, DecisionStatus, Event, Manifest, State
+from .models import AuditEntry, DecisionStatus, Event, Manifest, State, StateSnapshot
 
 
 @dataclass
@@ -53,6 +53,7 @@ class PerceiveResponse:
     audit_hash: Optional[str] = None
     chain_verified: bool = False
     patches_applied: List[str] = field(default_factory=list)
+    patches_rejected: List[str] = field(default_factory=list)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
@@ -68,6 +69,7 @@ class PerceiveResponse:
             "audit_hash": self.audit_hash,
             "chain_verified": self.chain_verified,
             "patches_applied": self.patches_applied,
+            "patches_rejected": self.patches_rejected,
             "timestamp": self.timestamp,
         }
 
@@ -80,12 +82,25 @@ class PERCEIVEEngine:
         manifest: Optional[Manifest] = None,
         gates: Optional[Sequence[BaseGate]] = None,
         patches: Optional[MicroPatchEngine] = None,
+        approvers: Optional[Sequence[str]] = None,
     ) -> None:
+        """Build an engine.
+
+        ``gates`` may not be empty: with no gate left to veto, every event
+        would be accepted. ``approvers`` names, once and at build time, who
+        may clear a refusal with ``resolve_refusal``; with none named, nobody
+        can.
+        """
         self.kernel = GovernanceKernel()
         self.manifest = manifest or pediatric_manifest()
         self.gates: List[BaseGate] = list(gates) if gates is not None else (
             default_gates() + [VitalsPlausibilityGate(), MonotonicTimeGate()]
         )
+        if not self.gates:
+            raise ValueError(
+                "an engine needs at least one gate: with none, every event would be accepted"
+            )
+        self._approvers = frozenset(str(a).strip() for a in (approvers or ()) if str(a).strip())
         self.patches = patches or MicroPatchEngine()
         self._states: Dict[str, State] = {}
         #: Subjects with a refusal no one has resolved, and why. While a
@@ -98,8 +113,11 @@ class PERCEIVEEngine:
 
     # -- governed submission ----------------------------------------------
 
-    def submit(self, event: Event) -> Tuple[State, PerceiveResponse]:
-        """Govern one event against its subject's accumulated state."""
+    def submit(self, event: Event) -> Tuple[StateSnapshot, PerceiveResponse]:
+        """Govern one event against its subject's accumulated state.
+
+        The state returned is a read-only snapshot, not the engine's own.
+        """
         state = self._states.get(event.context_id, State())
 
         gates = self.gates
@@ -111,7 +129,7 @@ class PERCEIVEEngine:
         effective = patch_result.event
 
         new_state, state_hash, entry = self.kernel.run_event(
-            state, effective, self.manifest, gates, patch_result.applied
+            state, effective, self.manifest, gates, patch_result.applied, patch_result.rejected
         )
 
         if entry.decision is DecisionStatus.ACCEPTED:
@@ -130,12 +148,13 @@ class PERCEIVEEngine:
             manifest_hash=self.manifest.hash,
             audit_hash=entry.audit_hash,
             patches_applied=patch_result.applied,
+            patches_rejected=list(patch_result.rejected),
         )
-        return new_state, response
+        return StateSnapshot.of(new_state), response
 
     # -- clinical convenience ---------------------------------------------
 
-    def ingest_patient(self, patient: Dict[str, Any]) -> Tuple[State, List[PerceiveResponse]]:
+    def ingest_patient(self, patient: Dict[str, Any]) -> Tuple[StateSnapshot, List[PerceiveResponse]]:
         """Admission followed by a first observation, as in the archive."""
         patient_id = patient["patient_id"]
         admission = Event(
@@ -193,15 +212,23 @@ class PERCEIVEEngine:
     def resolve_refusal(self, subject_id: str, resolved_by: str, reason: str) -> bool:
         """Explicitly clear a subject's refusal. Returns False if none was pending.
 
-        A resolution must name who made it and why; it is recorded in
-        ``resolutions``. Nothing else clears a refusal.
+        A resolution must name who made it and why, and the resolver must be
+        on the ``approvers`` list given when the engine was built (otherwise
+        ``PermissionError``). Each clearance is written into the hash-linked
+        ledger and also kept in ``resolutions``. Nothing else clears a refusal.
         """
         if not str(resolved_by or "").strip() or not str(reason or "").strip():
             raise ValueError("resolving a refusal needs a named resolver and a reason")
+        if resolved_by.strip() not in self._approvers:
+            raise PermissionError(f"{resolved_by!r} is not an approver for this engine")
         cleared = self._refusals.pop(subject_id, None)
         if cleared is None:
             return False
-        self.resolutions.append((subject_id, resolved_by, reason, cleared))
+        self.kernel.record_resolution(
+            subject_id, resolved_by.strip(), reason, cleared, self.manifest,
+            self._states.get(subject_id),
+        )
+        self.resolutions.append((subject_id, resolved_by.strip(), reason, cleared))
         return True
 
     # -- reporting ---------------------------------------------------------
@@ -219,8 +246,10 @@ class PERCEIVEEngine:
     def metrics(self):
         return self.kernel.metrics
 
-    def state_of(self, subject_id: str) -> Optional[State]:
-        return self._states.get(subject_id)
+    def state_of(self, subject_id: str) -> Optional[StateSnapshot]:
+        """A read-only snapshot of a subject's state, or None."""
+        held = self._states.get(subject_id)
+        return StateSnapshot.of(held) if held is not None else None
 
 
 class _UnresolvedRefusalGate(BaseGate):
