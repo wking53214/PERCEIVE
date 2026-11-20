@@ -14,7 +14,7 @@ from perceive.cns_connector import (
     cns_available,
 )
 from perceive.gates import BOTH, OMEGA_ONLY, BaseGate
-from perceive.models import Event, Manifest, State
+from perceive.models import Event, Manifest, State, state_fingerprint
 
 if os.environ.get("PERCEIVE_REQUIRE_CNS") == "1":  # CI: a missing cns is a failure, not a skip
     import cns.gate as cns_gate
@@ -50,6 +50,11 @@ class Fixed:
 
 class Named(BaseGate):
     name = "sentinel"
+
+
+def at_omega(event, post):
+    """An OMEGA candidate that carries the fingerprint of its post-state."""
+    return Judged(event, post, manifest(), produced_fingerprint=state_fingerprint(post))
 
 
 def judged(delta, state=None):
@@ -96,7 +101,7 @@ def produced(event, prior=None):
 def test_omega_passes_a_real_post_state():
     gate = PerceiveCnsGate(refuse_marked(), position="omega")
     event = Event("observation", {"n": 1}, "p1")
-    assert gate.check(Judged(event, produced(event), manifest())).outcome is cns_gate.GateOutcome.PASS
+    assert gate.check(at_omega(event, produced(event))).outcome is cns_gate.GateOutcome.PASS
 
 
 def test_backdating_is_refused_at_either_end():
@@ -114,7 +119,7 @@ def test_backdating_is_refused_at_either_end():
 
     on_time = Event("observation", {}, "p1", timestamp="2026-01-03T00:00:00")
     omega_ok = PerceiveCnsGate(MonotonicTimeGate(), "omega").check(
-        Judged(on_time, produced(on_time, prior), manifest()))
+        at_omega(on_time, produced(on_time, prior)))
     assert omega_ok.outcome is cns_gate.GateOutcome.PASS
 
 
@@ -230,10 +235,11 @@ def test_the_sentinel_gate_refuses_backdating_at_either_end():
     prior = State(history=[Event("observation", {}, "p1", timestamp="2026-01-02T00:00:00")])
     late = Event("observation", {}, "p1", timestamp="2026-01-01T00:00:00")
     on_time = Event("observation", {}, "p1", timestamp="2026-01-03T00:00:00")
-    for end, state_for in (("alpha", lambda e: prior), ("omega", lambda e: produced(e, prior))):
+    for end, make in (("alpha", lambda e: Judged(e, prior, manifest())),
+                      ("omega", lambda e: at_omega(e, produced(e, prior)))):
         gate = PerceiveCnsGate(SentinelGate(), end)
-        assert gate.check(Judged(late, state_for(late), manifest())).outcome is cns_gate.GateOutcome.TERMINAL_BREACH
-        assert gate.check(Judged(on_time, state_for(on_time), manifest())).outcome is cns_gate.GateOutcome.PASS
+        assert gate.check(make(late)).outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+        assert gate.check(make(on_time)).outcome is cns_gate.GateOutcome.PASS
 
 
 def test_the_connector_tells_the_gate_which_end_it_is_judging():
@@ -314,3 +320,35 @@ def test_a_malformed_declaration_fails_loudly_when_wrapped():
 
     with pytest.raises(ValueError, match="unknown position"):
         PerceiveCnsGate(Typo(), "alpha")
+
+
+def test_omega_refuses_a_post_state_with_no_fingerprint():
+    """The post-state must be tied to the state the engine produced."""
+    event = Event("observation", {"n": 1}, "p1")
+    result = PerceiveCnsGate(refuse_marked(), "omega").check(Judged(event, produced(event), manifest()))
+    assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+    assert "no fingerprint" in result.reason
+
+
+def test_omega_refuses_a_post_state_that_does_not_match_the_fingerprint():
+    event = Event("observation", {"n": 1}, "p1")
+    real = produced(event)
+    forged = produced(Event("observation", {"n": 1}, "p1"), State(history=[Event("observation", {"n": 9}, "p1")]))
+    result = PerceiveCnsGate(refuse_marked(), "omega").check(
+        Judged(event, forged, manifest(), produced_fingerprint=state_fingerprint(real)))
+    assert result.outcome is cns_gate.GateOutcome.TERMINAL_BREACH
+    assert "fingerprint" in result.reason
+
+
+def test_omega_accepts_the_state_hash_the_engine_returned():
+    from perceive.engine import PERCEIVEEngine
+
+    engine = PERCEIVEEngine()
+    event = Event("observation", {"vitals": {"heart_rate": 120, "respiratory_rate": 30, "temperature_c": 37.0,
+                                             "oxygen_saturation": 97, "systolic_bp": 95}}, "p9",
+                  metadata={"authority": "attending"})
+    snapshot, response = engine.submit(event)
+    assert response.accepted
+    result = PerceiveCnsGate(refuse_marked(), "omega").check(
+        Judged(event, snapshot, manifest(), produced_fingerprint=response.state_hash))
+    assert result.outcome is cns_gate.GateOutcome.PASS

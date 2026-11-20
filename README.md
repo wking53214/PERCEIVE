@@ -21,7 +21,7 @@ The default engine has six gates in `CANONICAL_ORDER`: `boundary`, `invariant_va
 
 What the content gates really check: `boundary`, `fortress`, `citadel` and `sentinel` match 16 fixed English words (for example `harm`, `forbidden`, `unsafe`, `drift`) as literal text in the event. They do not analyze meaning, and the `sentinel` "drift" check is the word, not a measurement. A note such as "tissue damage noted", "restricted diet" or "no anomaly" is refused, and a misspelling such as "h4rm" passes (EXECUTED 2026-11-15).
 
-Fail behavior: an exception in a gate or invariant is recorded as a fault and never read as permission. Two cases fail open. An engine or node built with an empty gate list (`gates=[]`) accepts every event, because no gate is left to veto (EXECUTED 2026-11-15). And a refusal is cleared by `resolve_refusal`, which accepts any non-empty name and reason from any caller and records the resolution in a plain list (`engine.resolutions`), not in the hash-linked ledger (EXECUTED 2026-11-15).
+Fail behavior: an exception in a gate or invariant is recorded as a fault and never read as permission. Two cases that used to fail open are closed (2026-11-19). An engine or node built with an empty gate list is refused with a `ValueError`. And a refusal is cleared only by `resolve_refusal`, which now needs a caller named in the `approvers` list given when the engine was built (`PermissionError` otherwise; with no list, nobody can), and writes each clearance into the hash-linked ledger as a `REFUSAL_RESOLVED` entry as well as `engine.resolutions`.
 
 ```
                         event
@@ -248,3 +248,9 @@ exercise the kernel, not to validate a clinical model against anything.
 [PROVENANCE.md](PROVENANCE.md), `NOTICE`, `recovered/consolidated-2026-06/README.md` (historical, not installed).
 
 Maintainer: William N. King.
+
+## Changes of 2026-11-19
+
+- `PERCEIVEEngine.submit` and `state_of` return a read-only `StateSnapshot` (tuple history, read-only context), not the engine's own state.
+- Every patch attempt is recorded: the ledger entry and the response carry `patches_rejected` as well as `patches_applied` (the field is hashed only when non-empty, so earlier entries keep their hashes).
+- An OMEGA CNS check (`PerceiveCnsGate` at `"omega"`) now needs `Judged.produced_fingerprint`, the `state_hash` the engine returned for that state, and refuses a post-state that does not hash to it or carries none. `state_fingerprint(state)` computes it.
