@@ -14,7 +14,10 @@ VITALS = {"heart_rate": 120, "respiratory_rate": 30, "temperature_c": 37.0,
 
 
 def _bad(subject):
-    return Event("admission", {"note": "classified"}, subject, metadata={"authority": "attending"})
+    # A well-formed admission whose authority label carries a listed word, so the word-list gate refuses
+    # it (the event-shape gate does not).
+    delta = {"patient_id": subject, "age_months": 12, "admission_time": "2026-11-20T10:00:00", "vitals": {}}
+    return Event("admission", delta, subject, metadata={"authority": "classified"})
 
 
 def _good(subject, vitals=None):

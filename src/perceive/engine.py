@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .clinical import (
+    EventShapeGate,
     MonotonicTimeGate,
     RiskComponents,
     VitalsPlausibilityGate,
@@ -94,7 +95,7 @@ class PERCEIVEEngine:
         self.kernel = GovernanceKernel()
         self.manifest = manifest or pediatric_manifest()
         self.gates: List[BaseGate] = list(gates) if gates is not None else (
-            default_gates() + [VitalsPlausibilityGate(), MonotonicTimeGate()]
+            [EventShapeGate()] + default_gates() + [VitalsPlausibilityGate(), MonotonicTimeGate()]
         )
         if not self.gates:
             raise ValueError(

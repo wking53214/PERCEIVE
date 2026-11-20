@@ -115,6 +115,69 @@ def pediatric_manifest(
 MAX_VITAL_STEP = 0.60
 
 
+#: What each clinical event type may carry. Anything else is refused, so a field the rules never
+#: look at cannot ride along, and a type nobody described cannot be accepted by default.
+ADMISSION_FIELDS = frozenset({"patient_id", "age_months", "admission_time", "vitals"})
+OBSERVATION_FIELDS = frozenset({"vitals"})
+
+
+def _is_number(value: Any) -> bool:
+    """A real, finite number. A string, a bool, None, NaN and infinity are not."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+class EventShapeGate(BaseGate):
+    """Refuse a clinical event whose structure is wrong, whatever its wording.
+
+    This checks what an event is, not what words it carries: the event type must be one the
+    clinical manifest describes, the delta may hold only that type's fields, and the vitals must
+    hold only real finite numbers. Fewer than the four vitals the model reads is allowed (the risk model scores missing vitals as unassessable), and so is an extra measurement the model ignores. It does not judge whether a
+    value is plausible; the invariants and the plausibility gate do that.
+    """
+
+    name = "event_shape"
+
+    #: Reads only the event.
+    positions = BOTH
+
+    def check(self, event: Event, state: State, manifest: Manifest) -> Tuple[bool, str]:
+        if event.event_type == "admission":
+            allowed = ADMISSION_FIELDS
+        elif event.event_type == "observation":
+            allowed = OBSERVATION_FIELDS
+        else:
+            return False, f"event type {event.event_type!r} is not a clinical event type"
+        delta = event.delta
+        if not isinstance(delta, dict):
+            return False, "event delta is not a mapping"
+        if set(delta) != allowed:
+            missing = sorted(allowed - set(delta))
+            extra = sorted(set(delta) - allowed)
+            return False, f"delta fields do not match {event.event_type}: missing {missing}, extra {extra}"
+        vitals = delta["vitals"]
+        if not isinstance(vitals, dict):
+            return False, "vitals is not a mapping"
+        for name, value in vitals.items():
+            if not _is_number(value):
+                return False, f"vital {name} is not a finite number"
+        if event.event_type == "admission":
+            if delta["patient_id"] != event.context_id:
+                return False, "patient_id does not match the event's subject"
+            if not _is_number(delta["age_months"]) or delta["age_months"] < 0:
+                return False, "age_months is not a non-negative number"
+            if not isinstance(delta["admission_time"], str):
+                return False, "admission_time is not a text timestamp"
+            try:
+                datetime.fromisoformat(delta["admission_time"])
+            except ValueError:
+                return False, "admission_time is not an ISO timestamp"
+        return True, ""
+
+
 class VitalsPlausibilityGate(BaseGate):
     """Reject implausible jumps between consecutive readings."""
 
