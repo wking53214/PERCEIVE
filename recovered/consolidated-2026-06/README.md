@@ -1,5 +1,11 @@
 # Recovered: consolidated OBSERVE + PERCEIVE (June 2026)
 
+> **Historical record. Not for clinical use, not a medical device, not compliance evidence.** This is how the system was
+> described in June 2026. The "HIPAA", "FDA 510(k)", "SOX" and "GDPR" outputs below are layouts modelled on those
+> regimes. They do not establish compliance with any of them, and the system has not been clinically validated or
+> reviewed by a clinician. The limits in this file's tables are the old ones; the current provisional limits are in
+> `observe-perceive`. Read it as history, not as guidance.
+
 This is the final state of a clinical governance system, recovered from a Claude
 conversation held between 2026-06-10 and 2026-06-15. It is the later, more
 complete lineage of the system this repository reconstructs. It is kept here as
@@ -17,7 +23,7 @@ design differs from the live package.
 | `observe_consolidated.py` | Seven risk engines, calibrated fusion, per-patient escalation policy, hash-chained audit, async scheduler |
 | `perceive_consolidated.py` | Six policy gates selected by request type, consensus, optional multi-node DGK, hash-chained audit |
 | `clinical_governance_system.py` | The orchestrator that wires OBSERVE's output into PERCEIVE's gates |
-| `compliance_exporters.py` | HIPAA, FDA 510(k), SOX and GDPR renderings of the two audit ledgers |
+| `compliance_exporters.py` | Exporters in layouts modelled on HIPAA, FDA 510(k), SOX and GDPR (not compliance evidence) |
 | `test_*.py` (five files) | 186 tests |
 | `pytest.ini` | Scopes collection to those five files |
 | `README_CONSOLIDATED.md` | The system's own README, as it was written then |
