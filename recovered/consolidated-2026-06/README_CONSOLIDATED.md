@@ -1,5 +1,11 @@
 # OBSERVE + PERCEIVE — Consolidated Clinical Governance System
 
+> **Historical record. Not for clinical use, not a medical device, not compliance evidence.** This is how the system was
+> described in June 2026. The "HIPAA", "FDA 510(k)", "SOX" and "GDPR" outputs below are layouts modelled on those
+> regimes. They do not establish compliance with any of them, and the system has not been clinically validated or
+> reviewed by a clinician. The limits in this file's tables are the old ones; the current provisional limits are in
+> `observe-perceive`. Read it as history, not as guidance.
+
 A pediatric physiological early-warning system (**OBSERVE**) wired to an
 AI-governance kernel (**PERCEIVE**), consolidated from a 19-file modular layout
 into **7 self-contained files** with no third-party dependencies (Python 3.8+ stdlib only).
@@ -21,7 +27,7 @@ vitals
 | 1 | `observe_consolidated.py` | Clinical engine: 7 risk adapters, calibrated fusion, per-patient policy, immutable audit, async scheduler |
 | 2 | `perceive_consolidated.py` | Governance kernel: 6 policy gates, unanimous consensus, DGK multi-node, immutable audit |
 | 3 | `clinical_governance_system.py` | **Integration surface** — the single object a hospital wires against |
-| 4 | `compliance_exporters.py` | HIPAA / FDA 510(k) / SOX / GDPR exporters |
+| 4 | `compliance_exporters.py` | Exporters in layouts modelled on HIPAA / FDA 510(k) / SOX / GDPR (not compliance evidence) |
 | 5 | `test_observe_consolidated.py` | OBSERVE unit + scenario tests |
 | 6 | `test_perceive_consolidated.py` | PERCEIVE unit + integration tests |
 | 7 | `test_integration_consolidated.py` | End-to-end OBSERVE→PERCEIVE tests |
@@ -112,9 +118,9 @@ drop in a new industry adapter without touching fusion.
 Both OBSERVE and PERCEIVE keep **independent SHA256-chained audit ledgers**.
 Any post-hoc tampering breaks the chain and is caught by `verify_integrity()`.
 
-`compliance_exporters.py` renders the ledgers into:
-- **HIPAA** — de-identified event log (pseudonymized IDs, hour-coarsened timestamps)
-- **FDA 510(k)** — validation report with determinism attestation + engine utilization
+`compliance_exporters.py` renders the ledgers into layouts modelled on these regimes (none of them is compliance evidence):
+- **HIPAA-style** — pseudonymized event log (this is not HIPAA de-identification) (pseudonymized IDs, hour-coarsened timestamps)
+- **FDA 510(k)-style** — decision-traceability report with determinism attestation (not a validation report) + engine utilization
 - **SOX** — governance decision log (who/what/when/result)
 - **GDPR** — Article 30-style data-processing record
 
@@ -124,7 +130,7 @@ Any post-hoc tampering breaks the chain and is caught by `verify_integrity()`.
 
 Every risk engine is a pure function of recorded telemetry + context. Identical
 inputs produce identical outputs and the same audit hash. No randomness in the
-decision path — a prerequisite for FDA validation and forensic replay.
+decision path — which helps forensic replay and would be one input to any future validation. The system has not been clinically validated.
 
 ---
 
